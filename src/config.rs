@@ -6,14 +6,15 @@ use std::path::{Path, PathBuf};
 use colored::*;
 
 const CONFIG_FILE_NAME: &str = "elm-i18n.json";
-const CONFIG_VERSION: &str = "1.0";
+const ELM_I18N_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "mode")]
 pub enum Config {
     #[serde(rename = "single-file")]
     SingleFile {
-        version: String,
+        #[serde(rename = "elm-i18n-version")]
+        elm_i18n_version: String,
         languages: Vec<String>,
         #[serde(rename = "sourceDir")]
         source_dir: PathBuf,
@@ -23,7 +24,8 @@ pub enum Config {
     },
     #[serde(rename = "multi-file")]
     MultiFile {
-        version: String,
+        #[serde(rename = "elm-i18n-version")]
+        elm_i18n_version: String,
         languages: Vec<String>,
         #[serde(rename = "sourceDir")]
         source_dir: PathBuf,
@@ -73,9 +75,12 @@ impl Config {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         match self {
-            Config::SingleFile { version, languages, file, .. } => {
-                if version != CONFIG_VERSION {
-                    bail!("Unsupported config version: {}. Expected: {}", version, CONFIG_VERSION);
+            Config::SingleFile { elm_i18n_version, languages, file, .. } => {
+                // Just warn if version is different, don't fail
+                let current_version = ELM_I18N_VERSION;
+                if !elm_i18n_version.starts_with(&current_version[..3]) {
+                    eprintln!("⚠ Config was created with elm-i18n v{}, current version is v{}", 
+                        elm_i18n_version.yellow(), current_version.yellow());
                 }
                 
                 if languages.is_empty() {
@@ -86,9 +91,12 @@ impl Config {
                     bail!("File path cannot be empty");
                 }
             }
-            Config::MultiFile { version, languages, files, .. } => {
-                if version != CONFIG_VERSION {
-                    bail!("Unsupported config version: {}. Expected: {}", version, CONFIG_VERSION);
+            Config::MultiFile { elm_i18n_version, languages, files, .. } => {
+                // Just warn if version is different, don't fail
+                let current_version = ELM_I18N_VERSION;
+                if !elm_i18n_version.starts_with(&current_version[..3]) {
+                    eprintln!("⚠ Config was created with elm-i18n v{}, current version is v{}", 
+                        elm_i18n_version.yellow(), current_version.yellow());
                 }
                 
                 if languages.is_empty() {
@@ -200,7 +208,7 @@ impl Config {
 /// Create a default single-file configuration
 pub fn create_default_single_file_config() -> Config {
     Config::SingleFile {
-        version: CONFIG_VERSION.to_string(),
+        elm_i18n_version: ELM_I18N_VERSION.to_string(),
         languages: vec!["en".to_string(), "fr".to_string()],
         source_dir: PathBuf::from("src"),
         file: PathBuf::from("src/I18n.elm"),
@@ -223,7 +231,7 @@ pub fn create_sample_multi_file_config() -> Config {
     });
     
     Config::MultiFile {
-        version: CONFIG_VERSION.to_string(),
+        elm_i18n_version: ELM_I18N_VERSION.to_string(),
         languages: vec!["en".to_string(), "fr".to_string()],
         source_dir: PathBuf::from("src"),
         files,

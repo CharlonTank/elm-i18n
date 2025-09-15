@@ -710,7 +710,7 @@ fn setup_single_file_config() -> Result<Config> {
     };
     
     Ok(Config::SingleFile {
-        version: "1.0".to_string(),
+        elm_i18n_version: env!("CARGO_PKG_VERSION").to_string(),
         languages,
         source_dir,
         file: file_path,
@@ -791,7 +791,7 @@ fn setup_multi_file_config() -> Result<Config> {
     }
     
     Ok(Config::MultiFile {
-        version: "1.0".to_string(),
+        elm_i18n_version: env!("CARGO_PKG_VERSION").to_string(),
         languages,
         source_dir,
         files,
