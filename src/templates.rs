@@ -1,5 +1,9 @@
 /// Returns the template for a new I18n.elm file
 pub fn get_i18n_template(languages: &[String]) -> String {
+    get_i18n_template_with_record_name(languages, "Translations")
+}
+
+pub fn get_i18n_template_with_record_name(languages: &[String], record_name: &str) -> String {
     let mut template = String::from(
         r#"module I18n exposing (..)
 
@@ -28,23 +32,24 @@ type Language
         }
     }
 
-    template.push_str(
+    template.push_str(&format!(
         r#"
 
 
-type alias Translations =
-    { appTitle : String
+type alias {} =
+    {{ appTitle : String
     , appName : String
     , welcome : String
     , loading : String
-    }
+    }}
 
 
 -- FUNCTIONS
 
 
 "#,
-    );
+        record_name
+    ));
 
     // Add translations for each language
     let langs = if languages.is_empty() {
@@ -55,7 +60,7 @@ type alias Translations =
 
     for lang in &langs {
         template.push_str(&format!(
-            r#"translations{} : Translations
+            r#"translations{} : {}
 translations{} =
     {{ appTitle = "{}"
     , appName = "My App"
@@ -66,6 +71,7 @@ translations{} =
 
 "#,
             capitalize_first(lang),
+            record_name,
             capitalize_first(lang),
             get_default_title(lang),
             get_default_welcome(lang),
@@ -117,14 +123,15 @@ stringToLanguage str =
     ));
 
     // Add translations function
-    template.push_str(
+    template.push_str(&format!(
         r#"{{-| Get translations for a given language
 -}}
-translations : Language -> Translations
+translations : Language -> {}
 translations lang =
     case lang of
 "#,
-    );
+        record_name
+    ));
 
     for lang in &langs {
         template.push_str(&format!(

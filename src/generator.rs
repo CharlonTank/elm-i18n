@@ -2,10 +2,14 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
-use crate::parser::parse_i18n_file;
+use crate::parser::{parse_i18n_file, parse_i18n_file_with_record_name};
 use crate::types::Translation;
 
 pub fn add_translation(path: &Path, translation: &Translation) -> Result<()> {
+    add_translation_with_record_name(path, translation, "Translations")
+}
+
+pub fn add_translation_with_record_name(path: &Path, translation: &Translation, record_name: &str) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -15,7 +19,7 @@ pub fn add_translation(path: &Path, translation: &Translation) -> Result<()> {
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
     
     // Parse the file to find insertion points
-    let parse_result = parse_i18n_file(path)?;
+    let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
     
     // Add to Translations type
     let type_insertion_line = find_last_field_line(&lines, parse_result.type_start_line, parse_result.type_end_line);
@@ -104,6 +108,10 @@ pub fn create_i18n_file(path: &Path, template: &str) -> Result<()> {
 }
 
 pub fn remove_translation(path: &Path, key: &str) -> Result<()> {
+    remove_translation_with_record_name(path, key, "Translations")
+}
+
+pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: &str) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -113,7 +121,7 @@ pub fn remove_translation(path: &Path, key: &str) -> Result<()> {
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
     
     // Parse the file to find the translation
-    let parse_result = parse_i18n_file(path)?;
+    let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
     
     // Check if the key exists
     if !parse_result.translations.contains_key(key) {

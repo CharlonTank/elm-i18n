@@ -7,7 +7,8 @@
       "Bash(elm-i18n:*)",
       "Bash(cargo build:*)",
       "Bash(find:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(sed:*)"
     ],
     "deny": []
   }

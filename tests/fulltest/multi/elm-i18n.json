@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "mode": "multi-file",
+  "languages": ["en", "fr"],
+  "sourceDir": "src",
+  "files": {
+    "app": {
+      "path": "src/I18n/App.elm",
+      "recordName": "AppTranslations"
+    },
+    "landing": {
+      "path": "src/I18n/Landing.elm",
+      "recordName": "LandingTranslations"
+    },
+    "admin": {
+      "path": "src/I18n/Admin.elm",
+      "recordName": "AdminTranslations"
+    }
+  }
+}

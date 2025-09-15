@@ -57,6 +57,24 @@ cargo install --path .
 
 ## Usage
 
+### Setup configuration (Required first step)
+
+```bash
+elm-i18n setup
+```
+
+This interactive command creates an `elm-i18n.json` configuration file. Choose between:
+- **Single-file mode**: One I18n.elm file for all translations
+- **Multi-file mode**: Separate files for different parts of your app
+
+### Check your configuration
+
+```bash
+elm-i18n status
+```
+
+Shows your current configuration, available shortcuts, and usage examples.
+
 ### Initialize a new I18n module
 
 ```bash

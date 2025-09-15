@@ -7,17 +7,24 @@ use std::path::Path;
 use crate::types::{ParseResult, Translation, TypeField, RecordField};
 
 pub fn parse_i18n_file(path: &Path) -> Result<ParseResult> {
+    parse_i18n_file_with_record_name(path, "Translations")
+}
+
+pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str) -> Result<ParseResult> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
     let lines: Vec<&str> = content.lines().collect();
     
-    // Find the Translations type definition
-    let type_bounds = find_type_definition(&lines)?;
+    // Find the type definition with custom record name
+    let type_bounds = find_type_definition_with_name(&lines, record_name)?;
     
-    // Find translationsEn and translationsFr
-    let en_bounds = find_translation_record(&lines, "translationsEn")?;
-    let fr_bounds = find_translation_record(&lines, "translationsFr")?;
+    // Try different naming conventions for language functions
+    // First try the standard translationsEn/translationsFr
+    let en_bounds = find_translation_record_with_type(&lines, "translationsEn", record_name)
+        .or_else(|_| find_translation_record_with_type(&lines, "en", record_name))?;
+    let fr_bounds = find_translation_record_with_type(&lines, "translationsFr", record_name)
+        .or_else(|_| find_translation_record_with_type(&lines, "fr", record_name))?;
     
     // Parse all translations
     let type_fields = parse_type_fields(&lines, type_bounds.0, type_bounds.1)?;
@@ -68,11 +75,15 @@ pub fn parse_i18n_file(path: &Path) -> Result<ParseResult> {
 }
 
 fn find_type_definition(lines: &[&str]) -> Result<(usize, usize)> {
+    find_type_definition_with_name(lines, "Translations")
+}
+
+fn find_type_definition_with_name(lines: &[&str], record_name: &str) -> Result<(usize, usize)> {
     let mut start = None;
     let mut brace_count = 0;
     
     for (i, line) in lines.iter().enumerate() {
-        if line.contains("type alias Translations") {
+        if line.contains(&format!("type alias {}", record_name)) {
             start = Some(i);
             continue;
         }
@@ -87,15 +98,19 @@ fn find_type_definition(lines: &[&str]) -> Result<(usize, usize)> {
         }
     }
     
-    anyhow::bail!("Could not find Translations type definition")
+    anyhow::bail!("Could not find {} type definition", record_name)
 }
 
 fn find_translation_record(lines: &[&str], name: &str) -> Result<(usize, usize)> {
+    find_translation_record_with_type(lines, name, "Translations")
+}
+
+fn find_translation_record_with_type(lines: &[&str], name: &str, record_type: &str) -> Result<(usize, usize)> {
     let mut start = None;
     let mut brace_count = 0;
     
     for (i, line) in lines.iter().enumerate() {
-        if line.starts_with(name) && line.contains("Translations") {
+        if line.starts_with(name) && line.contains(record_type) {
             start = Some(i);
             continue;
         }
@@ -177,6 +192,10 @@ fn parse_record_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<R
 }
 
 pub fn check_key_exists(path: &Path, key: &str) -> Result<Option<Translation>> {
-    let result = parse_i18n_file(path)?;
+    check_key_exists_with_record_name(path, key, "Translations")
+}
+
+pub fn check_key_exists_with_record_name(path: &Path, key: &str, record_name: &str) -> Result<Option<Translation>> {
+    let result = parse_i18n_file_with_record_name(path, record_name)?;
     Ok(result.translations.get(key).cloned())
 }

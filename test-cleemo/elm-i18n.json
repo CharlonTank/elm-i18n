@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "mode": "multi-file",
+  "languages": ["en", "fr"],
+  "sourceDir": "src",
+  "files": {
+    "app": {
+      "path": "src/I18n/App.elm",
+      "recordName": "Translations"
+    },
+    "coming": {
+      "path": "src/I18n/ComingSoon.elm",
+      "recordName": "ComingSoonTranslations"
+    },
+    "landing": {
+      "path": "src/I18n/LandingPage.elm",
+      "recordName": "LandingPageTranslations"
+    }
+  }
+}
