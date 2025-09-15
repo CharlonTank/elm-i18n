@@ -140,47 +140,258 @@ pub fn remove_translation(path: &Path, key: &str) -> Result<()> {
 fn remove_type_field(lines: &mut Vec<String>, key: &str) {
     // Find and remove the line containing the type field
     lines.retain(|line| {
-        !line.contains(&format!("{} :", key)) || !line.trim().starts_with(',') && !line.trim().starts_with('}')
+        // Keep the line if it doesn't contain "key :" pattern
+        // This handles both ", key :" and "key :" formats
+        !line.contains(&format!(" {} :", key))
     });
 }
 
 fn remove_record_field(lines: &mut Vec<String>, key: &str) {
-    let mut key_line_idx = None;
-    let mut is_multiline = false;
+    let mut field_start_idx = None;
+    let mut comma_line_idx = None;
     
+    // Find the field - it might be preceded by a comma on the previous line
     for (i, line) in lines.iter().enumerate() {
-        if line.contains(&format!("{} =", key)) {
-            key_line_idx = Some(i);
-            // Check if it's a multiline value (function)
-            is_multiline = line.contains('\\') || line.contains("case");
+        // Check if this line has a comma followed by our field on the next line
+        if i + 1 < lines.len() && line.trim().ends_with(',') && lines[i + 1].contains(&format!("{} =", key)) {
+            comma_line_idx = Some(i);
+            field_start_idx = Some(i + 1);
+            break;
+        }
+        // Check if this line starts with comma and our field
+        if line.trim_start().starts_with(&format!(", {} =", key)) {
+            field_start_idx = Some(i);
+            break;
+        }
+        // Check if this line just has our field (first field in record)
+        if line.contains(&format!("{} =", key)) && !line.trim_start().starts_with(',') {
+            field_start_idx = Some(i);
             break;
         }
     }
     
-    if let Some(idx) = key_line_idx {
+    if let Some(start_idx) = field_start_idx {
+        let mut lines_to_remove = vec![start_idx];
+        
+        // Check if it's a multi-line value (function or complex expression)
+        let field_line = &lines[start_idx];
+        let is_function = field_line.contains("\\") || field_line.contains("case") || field_line.contains("if ");
+        let is_multiline = is_function || !field_line.trim().ends_with('"');
+        
         if is_multiline {
-            // Remove the key line and all continuation lines
-            let mut lines_to_remove = vec![idx];
-            let mut j = idx + 1;
+            // Find the end of this field
+            let mut j = start_idx + 1;
+            let indent_level = count_leading_spaces(&lines[start_idx]);
             
             while j < lines.len() {
-                // Stop when we hit a line that starts a new field
-                if lines[j].trim_start().starts_with(',') || 
-                   lines[j].trim_start().starts_with('}') ||
-                   (lines[j].contains(" = ") && !lines[j].trim_start().starts_with("        ")) {
-                    break;
+                let current_line = &lines[j];
+                let current_indent = count_leading_spaces(current_line);
+                let trimmed = current_line.trim();
+                
+                // Check if we've reached the next field at the same or lower indent level
+                if !trimmed.is_empty() {
+                    // Next field at same level (starts with comma or closing brace)
+                    if current_indent <= indent_level && (trimmed.starts_with(',') || trimmed.starts_with('}')) {
+                        break;
+                    }
+                    // For fields inside the record, check for field assignment at similar indent
+                    if current_indent <= indent_level + 4 && trimmed.contains(" = ") && !trimmed.starts_with("case ") {
+                        // This might be the next field if it's not inside a case expression
+                        let before_eq = trimmed.split(" = ").next().unwrap_or("");
+                        if before_eq.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                            break;
+                        }
+                    }
                 }
+                
                 lines_to_remove.push(j);
                 j += 1;
             }
-            
-            // Remove lines in reverse order to maintain indices
-            for &line_idx in lines_to_remove.iter().rev() {
-                lines.remove(line_idx);
-            }
-        } else {
-            // Simple single-line removal
-            lines.remove(idx);
         }
+        
+        // Also remove the comma line if it exists and only contains a comma
+        if let Some(comma_idx) = comma_line_idx {
+            if lines[comma_idx].trim() == "," {
+                lines_to_remove.insert(0, comma_idx);
+            }
+        }
+        
+        // Handle the case where we need to fix trailing commas
+        // If we're removing the last field before }, we need to remove the comma from the previous field
+        if start_idx > 0 && lines_to_remove.len() > 0 {
+            let last_removed_idx = *lines_to_remove.last().unwrap();
+            if last_removed_idx + 1 < lines.len() && lines[last_removed_idx + 1].trim().starts_with('}') {
+                // Check if previous field ends with comma
+                let prev_field_idx = start_idx - 1;
+                if lines[prev_field_idx].trim().ends_with(',') {
+                    // Remove the trailing comma
+                    lines[prev_field_idx] = lines[prev_field_idx].trim_end().trim_end_matches(',').to_string();
+                }
+            }
+        }
+        
+        // Remove lines in reverse order to maintain indices
+        lines_to_remove.sort_by(|a, b| b.cmp(a));
+        for &line_idx in lines_to_remove.iter() {
+            lines.remove(line_idx);
+        }
+    }
+}
+
+fn count_leading_spaces(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_remove_anonymous_function_field() {
+        let temp_dir = TempDir::new().unwrap();
+        let i18n_file = temp_dir.path().join("I18n.elm");
+        
+        // Create a test I18n file with anonymous functions
+        let content = r#"module I18n exposing (..)
+
+type alias Translations =
+    { welcome : String
+    , ticketPriority : Ticket.Priority -> String
+    , ticketStatus : Ticket.Status -> String
+    , goodbye : String
+    }
+
+translationsEn : Translations
+translationsEn =
+    { welcome = "Welcome"
+    , ticketPriority =
+        \priority ->
+            case priority of
+                Ticket.Low -> "Low"
+                Ticket.Normal -> "Normal"
+                Ticket.High -> "High"
+                Ticket.Urgent -> "Urgent"
+    , ticketStatus =
+        \status ->
+            case status of
+                Ticket.Open -> "Open"
+                Ticket.InProgress -> "In Progress"
+                Ticket.Resolved -> "Resolved"
+                Ticket.Closed -> "Closed"
+    , goodbye = "Goodbye"
+    }
+
+translationsFr : Translations
+translationsFr =
+    { welcome = "Bienvenue"
+    , ticketPriority =
+        \priority ->
+            case priority of
+                Ticket.Low -> "Faible"
+                Ticket.Normal -> "Normal"
+                Ticket.High -> "Élevé"
+                Ticket.Urgent -> "Urgent"
+    , ticketStatus =
+        \status ->
+            case status of
+                Ticket.Open -> "Ouvert"
+                Ticket.InProgress -> "En cours"
+                Ticket.Resolved -> "Résolu"
+                Ticket.Closed -> "Fermé"
+    , goodbye = "Au revoir"
+    }
+"#;
+        
+        fs::write(&i18n_file, content).unwrap();
+        
+        // Remove the ticketStatus field
+        remove_translation(&i18n_file, "ticketStatus").unwrap();
+        
+        // Read the result
+        let result = fs::read_to_string(&i18n_file).unwrap();
+        
+        // Verify ticketStatus is completely removed
+        assert!(!result.contains("ticketStatus"));
+        
+        // Verify ticketPriority is intact and not corrupted
+        assert!(result.contains("ticketPriority ="));
+        assert!(result.contains(r#"Ticket.Low -> "Low""#));
+        assert!(result.contains(r#"Ticket.Urgent -> "Urgent""#));
+        
+        // Verify the structure is still valid (no orphaned lambdas)
+        assert!(!result.contains(r#"Ticket.Urgent -> "Urgent"
+    \status ->"#));
+        
+        // Verify other fields are intact
+        assert!(result.contains(r#"welcome = "Welcome""#));
+        assert!(result.contains(r#"goodbye = "Goodbye""#));
+    }
+    
+    #[test]
+    fn test_remove_field_between_functions() {
+        let temp_dir = TempDir::new().unwrap();
+        let i18n_file = temp_dir.path().join("I18n.elm");
+        
+        // Create a test with a simple field between two function fields
+        let content = r#"module I18n exposing (..)
+
+type alias Translations =
+    { funcA : Int -> String
+    , simpleField : String
+    , funcB : Bool -> String
+    }
+
+translationsEn : Translations
+translationsEn =
+    { funcA =
+        \n ->
+            if n > 0 then
+                "Positive"
+            else
+                "Non-positive"
+    , simpleField = "Simple"
+    , funcB =
+        \b ->
+            if b then
+                "True"
+            else
+                "False"
+    }
+
+translationsFr : Translations
+translationsFr =
+    { funcA =
+        \n ->
+            if n > 0 then
+                "Positif"
+            else
+                "Non-positif"
+    , simpleField = "Simple"
+    , funcB =
+        \b ->
+            if b then
+                "Vrai"
+            else
+                "Faux"
+    }
+"#;
+        
+        fs::write(&i18n_file, content).unwrap();
+        
+        // Remove the simple field
+        remove_translation(&i18n_file, "simpleField").unwrap();
+        
+        let result = fs::read_to_string(&i18n_file).unwrap();
+        
+        // Verify simpleField is removed
+        assert!(!result.contains("simpleField"));
+        
+        // Verify both functions are intact
+        assert!(result.contains("funcA ="));
+        assert!(result.contains(r#""Positive""#));
+        assert!(result.contains("funcB ="));
+        assert!(result.contains(r#""True""#));
     }
 }

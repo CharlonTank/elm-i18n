@@ -10,10 +10,16 @@ cp target/release/elm-i18n /usr/local/bin/
 chmod +x /usr/local/bin/elm-i18n
 
 echo "elm-i18n has been installed to /usr/local/bin/"
+echo ""
+
+# Show the installed version
+/usr/local/bin/elm-i18n --version
+
+echo ""
 echo "You can now use it from anywhere by running:"
 echo ""
 echo "  elm-i18n --help"
 echo "  elm-i18n add myKey --fr \"Ma clé\" --en \"My key\""
 echo "  elm-i18n check myKey"
 echo "  elm-i18n remove oldKey"
-EOF < /dev/null
+echo "  elm-i18n version  # Show detailed version info"

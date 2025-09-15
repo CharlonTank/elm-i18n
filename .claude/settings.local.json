@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test:*)",
+      "Bash(./install.sh)",
+      "Bash(cp:*)",
+      "Bash(elm-i18n:*)",
+      "Bash(cargo build:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)"
+    ],
+    "deny": []
+  }
+}

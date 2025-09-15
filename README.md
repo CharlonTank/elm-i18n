@@ -8,10 +8,13 @@ A command-line tool for managing internationalization (i18n) translations in Elm
 - ✅ Add function translations (with anonymous functions)
 - ✅ Check if translations exist
 - ✅ Remove translations
+- ✅ Remove all unused translations
+- ✅ List all translations with filtering
 - ✅ Initialize new I18n.elm files
 - ✅ Shows existing translations when key already exists
 - ✅ Maintains proper Elm formatting
 - ✅ Creates backups before modifying files
+- ✅ **NEW**: Automatically replace hardcoded strings in your codebase
 
 ## Installation
 
@@ -79,6 +82,48 @@ If the key already exists, it will show the current translations:
 The existing translations might be sufficient. Consider using a different key.
 ```
 
+### Add a translation and replace hardcoded strings
+
+**NEW**: Use the `--replace` flag to automatically find and replace hardcoded strings in your codebase:
+
+```bash
+elm-i18n add youAreWelcome --fr="De rien" --en="You are welcome" --replace
+```
+
+This will:
+1. Add the translation to your I18n.elm file
+2. Search for all occurrences of "De rien" and "You are welcome" in your Elm files
+3. Replace them with `t.youAreWelcome`
+
+Note: You'll need to ensure `t` (translations) is passed as a parameter to your views. The compiler will guide you through any necessary changes.
+
+Example output:
+```
+✓ Added translation 'youAreWelcome' to src/I18n.elm
+  EN: You are welcome
+  FR: De rien
+
+🔍 Searching for hardcoded strings to replace...
+
+✓ Found 2 occurrences of "You are welcome":
+  src/Main.elm:10:
+    , p [] [ text "You are welcome" ]
+  src/Main.elm:13:
+    [ text "You are welcome"
+
+✓ Found 2 occurrences of "De rien":
+  src/Main.elm:11:
+    , p [] [ text "De rien" ]
+  src/Main.elm:15:
+    , text "De rien"
+
+🔄 Replacing strings with t.youAreWelcome...
+✓ Replaced 4 occurrences across 1 file(s)
+```
+
+Options for `--replace`:
+- `--src-dir`: Directory to search for replacements (default: "src")
+
 ### Add a function translation
 
 For translations that require parameters or complex logic:
@@ -124,6 +169,26 @@ elm-i18n remove oldKey
 #   FR: Ancien texte
 # 
 # ✓ Removed translation 'oldKey' from src/I18n.elm
+```
+
+### List all translations
+
+```bash
+elm-i18n list
+# 📋 Found 6 translations:
+#   • cancel (String)
+#   • itemCount (Int -> String)
+#   • loading (String)
+#   • save (String)
+#   • ticketStatus (Ticket.Status -> String)
+#   • welcome (String)
+
+elm-i18n list --verbose
+# Shows full translation values for each key
+
+elm-i18n list --filter "ticket"
+# 📋 Found 1 translation:
+#   • ticketStatus (Ticket.Status -> String)
 ```
 
 ### Specify a custom file location
@@ -184,6 +249,7 @@ elm-i18n check appName
 - [ ] Batch operations from a file
 - [ ] Alphabetical sorting option
 - [x] Remove translation command ✅
+- [x] Automatic string replacement in codebase ✅
 
 ## License
 
