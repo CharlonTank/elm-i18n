@@ -13,7 +13,7 @@ mod types;
 
 use crate::config::{Config, FileConfig, config_exists, prompt_setup_message};
 use crate::generator::{add_translation_with_record_name, create_i18n_file, remove_translation_with_record_name};
-use crate::parser::{check_key_exists_with_record_name, parse_i18n_file, parse_i18n_file_with_record_name};
+use crate::parser::{check_key_exists_with_record_name, parse_i18n_file_with_record_name};
 use crate::replacer::{find_string_occurrences, replace_strings, find_unused_keys};
 use crate::templates::get_i18n_template_with_record_name;
 use crate::types::Translation;
@@ -1006,7 +1006,7 @@ fn handle_remove(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record_name: &str) -> Result<()> {
+fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, _record_name: &str) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);

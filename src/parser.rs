@@ -6,10 +6,6 @@ use std::path::Path;
 
 use crate::types::{ParseResult, Translation, TypeField, RecordField};
 
-pub fn parse_i18n_file(path: &Path) -> Result<ParseResult> {
-    parse_i18n_file_with_record_name(path, "Translations")
-}
-
 pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str) -> Result<ParseResult> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
@@ -74,10 +70,6 @@ pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str) -> Resul
     })
 }
 
-fn find_type_definition(lines: &[&str]) -> Result<(usize, usize)> {
-    find_type_definition_with_name(lines, "Translations")
-}
-
 fn find_type_definition_with_name(lines: &[&str], record_name: &str) -> Result<(usize, usize)> {
     let mut start = None;
     let mut brace_count = 0;
@@ -99,10 +91,6 @@ fn find_type_definition_with_name(lines: &[&str], record_name: &str) -> Result<(
     }
     
     anyhow::bail!("Could not find {} type definition", record_name)
-}
-
-fn find_translation_record(lines: &[&str], name: &str) -> Result<(usize, usize)> {
-    find_translation_record_with_type(lines, name, "Translations")
 }
 
 fn find_translation_record_with_type(lines: &[&str], name: &str, record_type: &str) -> Result<(usize, usize)> {
@@ -189,10 +177,6 @@ fn parse_record_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<R
     }
     
     Ok(fields)
-}
-
-pub fn check_key_exists(path: &Path, key: &str) -> Result<Option<Translation>> {
-    check_key_exists_with_record_name(path, key, "Translations")
 }
 
 pub fn check_key_exists_with_record_name(path: &Path, key: &str, record_name: &str) -> Result<Option<Translation>> {

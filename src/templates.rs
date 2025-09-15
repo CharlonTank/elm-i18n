@@ -1,7 +1,3 @@
-/// Returns the template for a new I18n.elm file
-pub fn get_i18n_template(languages: &[String]) -> String {
-    get_i18n_template_with_record_name(languages, "Translations")
-}
 
 pub fn get_i18n_template_with_record_name(languages: &[String], record_name: &str) -> String {
     let mut template = String::from(

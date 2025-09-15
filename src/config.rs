@@ -131,13 +131,6 @@ impl Config {
         Ok(())
     }
     
-    /// Get languages configured
-    pub fn languages(&self) -> &Vec<String> {
-        match self {
-            Config::SingleFile { languages, .. } => languages,
-            Config::MultiFile { languages, .. } => languages,
-        }
-    }
     
     /// Get source directory
     pub fn source_dir(&self) -> &PathBuf {
@@ -147,21 +140,6 @@ impl Config {
         }
     }
     
-    /// Get file config for a given shortcut (multi-file mode)
-    pub fn get_file_config(&self, shortcut: &str) -> Option<&FileConfig> {
-        match self {
-            Config::MultiFile { files, .. } => files.get(shortcut),
-            _ => None,
-        }
-    }
-    
-    /// Get the single file path (single-file mode)
-    pub fn get_single_file(&self) -> Option<(&PathBuf, &str)> {
-        match self {
-            Config::SingleFile { file, record_name, .. } => Some((file, record_name)),
-            _ => None,
-        }
-    }
     
     /// Check if in multi-file mode
     pub fn is_multi_file(&self) -> bool {
@@ -202,39 +180,6 @@ impl Config {
             println!("Example: elm-i18n {} add myKey --en \"...\" --fr \"...\"",
                 "--<shortcut>".yellow());
         }
-    }
-}
-
-/// Create a default single-file configuration
-pub fn create_default_single_file_config() -> Config {
-    Config::SingleFile {
-        elm_i18n_version: ELM_I18N_VERSION.to_string(),
-        languages: vec!["en".to_string(), "fr".to_string()],
-        source_dir: PathBuf::from("src"),
-        file: PathBuf::from("src/I18n.elm"),
-        record_name: "Translations".to_string(),
-    }
-}
-
-/// Create a sample multi-file configuration
-pub fn create_sample_multi_file_config() -> Config {
-    let mut files = HashMap::new();
-    
-    files.insert("app".to_string(), FileConfig {
-        path: PathBuf::from("src/I18n/App.elm"),
-        record_name: "AppTranslations".to_string(),
-    });
-    
-    files.insert("landing".to_string(), FileConfig {
-        path: PathBuf::from("src/I18n/LandingPage.elm"),
-        record_name: "LandingPageTranslations".to_string(),
-    });
-    
-    Config::MultiFile {
-        elm_i18n_version: ELM_I18N_VERSION.to_string(),
-        languages: vec!["en".to_string(), "fr".to_string()],
-        source_dir: PathBuf::from("src"),
-        files,
     }
 }
 

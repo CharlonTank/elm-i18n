@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::collections::{HashMap, HashSet};
 use walkdir::WalkDir;
-use crate::parser::parse_i18n_file;
+use crate::parser::parse_i18n_file_with_record_name;
 
 #[derive(Debug, Clone)]
 pub struct StringMatch {
@@ -17,7 +17,6 @@ pub struct StringMatch {
 
 #[derive(Debug)]
 struct FunctionInfo {
-    name: String,
     line_number: usize,
     has_translations_param: bool,
     type_signature_line: Option<usize>,
@@ -28,7 +27,6 @@ struct FunctionCall {
     caller_function: String,
     called_function: String,
     line_number: usize,
-    line_content: String,
 }
 
 /// Find all occurrences of exact strings in Elm files
@@ -256,7 +254,6 @@ fn analyze_elm_file(lines: &[String]) -> (HashMap<String, FunctionInfo>, Vec<Fun
                             function_infos.insert(
                                 func_name.clone(),
                                 FunctionInfo {
-                                    name: func_name.clone(),
                                     line_number: j + 1,
                                     has_translations_param: has_t,
                                     type_signature_line: Some(i + 1),
@@ -276,7 +273,6 @@ fn analyze_elm_file(lines: &[String]) -> (HashMap<String, FunctionInfo>, Vec<Fun
                 function_infos.insert(
                     func_name.clone(),
                     FunctionInfo {
-                        name: func_name.clone(),
                         line_number: i + 1,
                         has_translations_param: has_t,
                         type_signature_line: None,
@@ -319,7 +315,6 @@ fn analyze_elm_file(lines: &[String]) -> (HashMap<String, FunctionInfo>, Vec<Fun
                             caller_function: caller.clone(),
                             called_function: func_name.clone(),
                             line_number: i + 1,
-                            line_content: line.clone(),
                         });
                     }
                 }
@@ -334,18 +329,6 @@ fn analyze_elm_file(lines: &[String]) -> (HashMap<String, FunctionInfo>, Vec<Fun
 fn extract_function_from_type_signature(line: &str) -> Option<String> {
     let type_sig_regex = Regex::new(r"^([a-z][a-zA-Z0-9_]*)\s*:").unwrap();
     type_sig_regex.captures(line).map(|c| c[1].to_string())
-}
-
-/// Check if a function name is an Elm builtin
-fn is_elm_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "then" | "else" | "case" | "of" | "let" | "in" | "type" | "alias" | "port" |
-        "module" | "import" | "exposing" | "as" | "where" |
-        "div" | "span" | "text" | "button" | "input" | "form" | "Html" |
-        "String" | "Int" | "Float" | "Bool" | "Maybe" | "List" | "Result" |
-        "map" | "map2" | "map3" | "andThen" | "withDefault"
-    )
 }
 
 /// Check if a line is a let binding
@@ -633,7 +616,7 @@ fn add_t_to_function_call(line: &str, func_name: &str) -> String {
 /// Find all translation keys that are not used in the codebase
 pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path) -> Result<Vec<String>> {
     // Parse the I18n file to get all translation keys
-    let parse_result = parse_i18n_file(i18n_file)?;
+    let parse_result = parse_i18n_file_with_record_name(i18n_file, "Translations")?;
     let all_keys: HashSet<String> = parse_result.translations.keys().cloned().collect();
     
     // Find all uses of t.key in the codebase

@@ -2,12 +2,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
-use crate::parser::{parse_i18n_file, parse_i18n_file_with_record_name};
+use crate::parser::parse_i18n_file_with_record_name;
 use crate::types::Translation;
-
-pub fn add_translation(path: &Path, translation: &Translation) -> Result<()> {
-    add_translation_with_record_name(path, translation, "Translations")
-}
 
 pub fn add_translation_with_record_name(path: &Path, translation: &Translation, record_name: &str) -> Result<()> {
     // Create backup
@@ -105,10 +101,6 @@ pub fn create_i18n_file(path: &Path, template: &str) -> Result<()> {
         .with_context(|| format!("Failed to write I18n.elm to {}", path.display()))?;
     
     Ok(())
-}
-
-pub fn remove_translation(path: &Path, key: &str) -> Result<()> {
-    remove_translation_with_record_name(path, key, "Translations")
 }
 
 pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: &str) -> Result<()> {
