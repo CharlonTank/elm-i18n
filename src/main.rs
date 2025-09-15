@@ -46,6 +46,9 @@ enum Commands {
     /// Show current configuration status
     Status,
     
+    /// Setup or update CLAUDE.md with elm-i18n instructions
+    SetupClaude,
+    
     /// Add a simple translation
     Add {
         /// The translation key
@@ -204,6 +207,7 @@ fn main() -> Result<()> {
         Commands::Setup => return handle_setup(),
         Commands::Version => return handle_version(),
         Commands::Status => return handle_status(),
+        Commands::SetupClaude => return handle_setup_claude(),
         _ => {}
     }
     
@@ -301,7 +305,8 @@ fn main() -> Result<()> {
         }
         
         Commands::Version => unreachable!(),
-        Commands::Status => unreachable!()
+        Commands::Status => unreachable!(),
+        Commands::SetupClaude => unreachable!()
     }
     
     Ok(())
@@ -345,6 +350,186 @@ fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &C
             }
         }
     }
+}
+
+/// Handle the setup-claude command
+fn handle_setup_claude() -> Result<()> {
+    use std::fs;
+    
+    println!("{} Setting up CLAUDE.md with elm-i18n instructions...", "🤖".blue());
+    println!();
+    
+    // Load configuration to understand project setup
+    let config = match Config::load()? {
+        Some(config) => config,
+        None => {
+            eprintln!("{} No elm-i18n.json configuration found!", "✗".red());
+            eprintln!("Run {} first to create a configuration.", "elm-i18n setup".green());
+            std::process::exit(1);
+        }
+    };
+    
+    // Check if CLAUDE.md already exists
+    let claude_path = PathBuf::from("CLAUDE.md");
+    let existing_content = if claude_path.exists() {
+        fs::read_to_string(&claude_path).ok()
+    } else {
+        None
+    };
+    
+    // Generate elm-i18n specific instructions
+    let elm_i18n_section = generate_claude_instructions(&config);
+    
+    // Track if we're updating or creating
+    let is_update = existing_content.is_some();
+    
+    // Merge or create CLAUDE.md
+    let final_content = if let Some(existing) = existing_content {
+        // Check if elm-i18n section already exists
+        if existing.contains("## elm-i18n Configuration") {
+            // Replace existing elm-i18n section
+            let before_section = existing.split("## elm-i18n Configuration").next().unwrap_or("");
+            let after_section = existing.split("## elm-i18n Configuration")
+                .nth(1)
+                .and_then(|s| s.split("\n## ").nth(1))
+                .map(|s| format!("\n## {}", s))
+                .unwrap_or_default();
+            
+            format!("{}{}{}", before_section, elm_i18n_section, after_section)
+        } else {
+            // Append elm-i18n section
+            format!("{}\n\n{}", existing.trim(), elm_i18n_section)
+        }
+    } else {
+        // Create new CLAUDE.md with elm-i18n instructions
+        format!("# Project-Specific Instructions for Claude\n\n{}", elm_i18n_section)
+    };
+    
+    // Write the file
+    fs::write(&claude_path, final_content)?;
+    
+    println!("{} CLAUDE.md has been {}", 
+        "✓".green(),
+        if is_update { "updated" } else { "created" }
+    );
+    
+    println!();
+    println!("The file contains:");
+    println!("  • elm-i18n configuration details");
+    println!("  • Available translation files and shortcuts");
+    println!("  • Example commands for your specific setup");
+    println!();
+    println!("Claude will use these instructions to help with translations.");
+    
+    Ok(())
+}
+
+fn generate_claude_instructions(config: &Config) -> String {
+    let mut instructions = String::from("## elm-i18n Configuration\n\n");
+    instructions.push_str("This project uses elm-i18n for managing translations. ");
+    
+    match config {
+        Config::SingleFile { file, record_name, languages, .. } => {
+            instructions.push_str(&format!("It's configured in **single-file mode**.\n\n"));
+            instructions.push_str("### Configuration Details\n\n");
+            instructions.push_str(&format!("- **Translation file**: `{}`\n", file.display()));
+            instructions.push_str(&format!("- **Record type**: `{}`\n", record_name));
+            instructions.push_str(&format!("- **Languages**: {}\n", languages.join(", ")));
+            instructions.push_str("\n### Usage Examples\n\n");
+            instructions.push_str("```bash\n");
+            instructions.push_str("# Add a simple translation\n");
+            instructions.push_str(&format!("elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\"\n\n"));
+            instructions.push_str("# Add a function translation\n");
+            instructions.push_str("elm-i18n add-fn itemCount \\\n");
+            instructions.push_str("  --type-sig \"Int -> String\" \\\n");
+            instructions.push_str("  --en \"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
+            instructions.push_str("  --fr \"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
+            instructions.push_str("# Check if a key exists\n");
+            instructions.push_str("elm-i18n check myKey\n\n");
+            instructions.push_str("# List all translations\n");
+            instructions.push_str("elm-i18n list\n\n");
+            instructions.push_str("# Remove a translation\n");
+            instructions.push_str("elm-i18n remove myKey\n");
+            instructions.push_str("```\n");
+        }
+        Config::MultiFile { files, languages, .. } => {
+            instructions.push_str(&format!("It's configured in **multi-file mode** with {} translation files.\n\n", files.len()));
+            instructions.push_str("### Configuration Details\n\n");
+            instructions.push_str(&format!("- **Languages**: {}\n", languages.join(", ")));
+            instructions.push_str("- **Translation files**:\n");
+            
+            for (shortcut, file_config) in files {
+                instructions.push_str(&format!("  - `--target {}` → `{}` (Record: `{}`)\n", 
+                    shortcut, 
+                    file_config.path.display(),
+                    file_config.record_name
+                ));
+            }
+            
+            instructions.push_str("\n### Usage Examples\n\n");
+            instructions.push_str("```bash\n");
+            
+            if let Some((first_shortcut, _)) = files.iter().next() {
+                instructions.push_str(&format!("# Add a translation to the {} file\n", first_shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} add myKey --en \"Hello\" --fr \"Bonjour\"\n\n", first_shortcut));
+                
+                instructions.push_str(&format!("# Add a function translation to the {} file\n", first_shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} add-fn itemCount \\\n", first_shortcut));
+                instructions.push_str("  --type-sig \"Int -> String\" \\\n");
+                instructions.push_str("  --en \"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
+                instructions.push_str("  --fr \"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
+                
+                instructions.push_str(&format!("# Check if a key exists in the {} file\n", first_shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} check myKey\n\n", first_shortcut));
+                
+                instructions.push_str(&format!("# List all translations in the {} file\n", first_shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} list\n\n", first_shortcut));
+                
+                instructions.push_str(&format!("# Remove a translation from the {} file\n", first_shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} remove myKey\n", first_shortcut));
+            }
+            
+            instructions.push_str("```\n");
+            
+            instructions.push_str("\n### Important Notes\n\n");
+            instructions.push_str("- **Always specify `--target <shortcut>`** when working with translations\n");
+            instructions.push_str("- Each file has its own record type and translation set\n");
+            instructions.push_str("- Use `elm-i18n status` to see all available shortcuts\n");
+        }
+    }
+    
+    instructions.push_str("\n### Additional Commands\n\n");
+    instructions.push_str("```bash\n");
+    instructions.push_str("# Show current configuration\n");
+    instructions.push_str("elm-i18n status\n\n");
+    instructions.push_str("# Find and remove unused translations\n");
+    if config.is_multi_file() {
+        if let Config::MultiFile { files, .. } = config {
+            if let Some((shortcut, _)) = files.iter().next() {
+                instructions.push_str(&format!("elm-i18n --target {} remove-unused --confirm\n\n", shortcut));
+            }
+        }
+    } else {
+        instructions.push_str("elm-i18n remove-unused --confirm\n\n");
+    }
+    instructions.push_str("# Add translation and replace hardcoded strings\n");
+    if config.is_multi_file() {
+        if let Config::MultiFile { files, .. } = config {
+            if let Some((shortcut, _)) = files.iter().next() {
+                instructions.push_str(&format!("elm-i18n --target {} add myKey --en \"Hello\" --fr \"Bonjour\" --replace\n", shortcut));
+            }
+        }
+    } else {
+        instructions.push_str("elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\" --replace\n");
+    }
+    instructions.push_str("```\n");
+    
+    instructions.push_str("\n### Key Naming Conventions\n\n");
+    instructions.push_str("- Use camelCase for keys (e.g., `welcomeMessage`, `userProfile`)\n");
+    instructions.push_str("- Keys cannot contain dots (.) as they're reserved for access syntax\n");
+    instructions.push_str("- Elm reserved words will automatically get an underscore suffix\n");
+    
+    instructions
 }
 
 /// Handle the status command
