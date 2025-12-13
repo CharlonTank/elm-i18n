@@ -1006,16 +1006,16 @@ fn handle_remove(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, _record_name: &str) -> Result<()> {
+fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record_name: &str) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);
     }
-    
+
     println!("{} Scanning for unused translation keys...", "🔍".blue());
-    
+
     // Find all unused keys
-    let unused_keys = find_unused_keys(file, src_dir)?;
+    let unused_keys = find_unused_keys(file, src_dir, record_name)?;
     
     if unused_keys.is_empty() {
         println!("{} All translation keys are in use!", "✓".green());
@@ -1041,7 +1041,7 @@ fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, _recor
     println!("{} Removing unused keys...", "🗑".red());
     
     for key in &unused_keys {
-        match remove_translation_with_record_name(file, key, "Translations") {
+        match remove_translation_with_record_name(file, key, record_name) {
             Ok(_) => {
                 println!("  {} Removed: {}", "✓".green(), key);
             }
