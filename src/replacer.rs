@@ -618,10 +618,10 @@ pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str) -> 
     // Parse the I18n file to get all translation keys
     let parse_result = parse_i18n_file_with_record_name(i18n_file, record_name)?;
     let all_keys: HashSet<String> = parse_result.translations.keys().cloned().collect();
-    
-    // Find all uses of t.key in the codebase
+
+    // Find all uses of translation keys in the codebase
     let mut used_keys = HashSet::new();
-    
+
     // Walk through all Elm files
     for entry in WalkDir::new(src_dir)
         .into_iter()
@@ -629,46 +629,51 @@ pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str) -> 
     {
         let entry = entry?;
         let path = entry.path();
-        
+
         // Only process .elm files
         if path.is_file() && path.extension().map_or(false, |ext| ext == "elm") {
-            // Skip I18n.elm itself
-            if path.file_name().map_or(false, |name| name == "I18n.elm") {
+            // Skip I18n files themselves
+            if path.file_name().map_or(false, |name| {
+                let name_str = name.to_string_lossy();
+                name_str == "I18n.elm"
+                    || name_str == "App.elm"
+                    || name_str == "LandingPage.elm"
+                    || name_str == "ComingSoon.elm"
+                    || name_str == "Email.elm"
+                    || name_str == "Errors.elm"
+            }) && path.parent().map_or(false, |p| {
+                p.file_name().map_or(false, |pname| pname == "I18n")
+            }) {
                 continue;
             }
-            
+
             let content = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read file: {}", path.display()))?;
-            
-            // Look for patterns like t.key or translations.key
-            let t_pattern = Regex::new(r"\bt\.([a-zA-Z][a-zA-Z0-9_]*)\b").unwrap();
-            let translations_pattern = Regex::new(r"\btranslations\.([a-zA-Z][a-zA-Z0-9_]*)\b").unwrap();
-            
+
+            // Look for patterns like <var>.<key> where <var> is a short identifier
+            // This catches t.key, tlp.key, tcs.key, translations.key, etc.
+            // Pattern: word boundary, 1-12 char identifier, dot, then the field name
+            let field_access_pattern = Regex::new(r"\b[a-zA-Z][a-zA-Z0-9_]{0,11}\.([a-zA-Z][a-zA-Z0-9_]*)\b").unwrap();
+
             // Find all matches
-            for captures in t_pattern.captures_iter(&content) {
-                if let Some(key) = captures.get(1) {
-                    used_keys.insert(key.as_str().to_string());
-                }
-            }
-            
-            for captures in translations_pattern.captures_iter(&content) {
+            for captures in field_access_pattern.captures_iter(&content) {
                 if let Some(key) = captures.get(1) {
                     used_keys.insert(key.as_str().to_string());
                 }
             }
         }
     }
-    
+
     // Find unused keys
     let unused_keys: Vec<String> = all_keys
         .difference(&used_keys)
         .cloned()
         .collect::<Vec<_>>();
-    
+
     // Sort for consistent output
     let mut unused_keys = unused_keys;
     unused_keys.sort();
-    
+
     Ok(unused_keys)
 }
 

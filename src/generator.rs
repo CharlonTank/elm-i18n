@@ -138,18 +138,54 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
 }
 
 fn remove_type_field(lines: &mut Vec<String>, key: &str) {
-    // Find and remove the line containing the type field
-    lines.retain(|line| {
-        // Keep the line if it doesn't contain "key :" pattern
-        // This handles both ", key :" and "key :" formats
-        !line.contains(&format!(" {} :", key))
-    });
+    // Find the line containing the type field
+    let mut field_idx = None;
+    let mut is_first_field = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains(&format!(" {} :", key)) {
+            field_idx = Some(i);
+            // Check if this is the first field (no leading comma)
+            let trimmed = line.trim_start();
+            is_first_field = !trimmed.starts_with(',');
+            break;
+        }
+    }
+
+    if let Some(idx) = field_idx {
+        // Remove the field line
+        lines.remove(idx);
+
+        // If we removed the first field, we need to make the next field the first
+        if is_first_field && idx < lines.len() {
+            // Find the next field line (starts with comma)
+            let mut next_field_idx = idx;
+            while next_field_idx < lines.len() {
+                let line = lines[next_field_idx].trim();
+                if line.starts_with(',') {
+                    // This is the next field - convert it to first field format
+                    // Change ", fieldName : Type" to "  fieldName : Type"
+                    let field_line = &lines[next_field_idx];
+                    // Replace the leading ", " with "  " to maintain proper indentation
+                    let new_line = field_line.replacen(", ", "  ", 1);
+                    lines[next_field_idx] = new_line;
+                    break;
+                } else if line.starts_with('}') {
+                    // No more fields
+                    break;
+                }
+                // Skip comments and empty lines
+                next_field_idx += 1;
+            }
+        }
+    }
 }
 
 fn remove_record_field(lines: &mut Vec<String>, key: &str) {
     let mut field_start_idx = None;
     let mut comma_line_idx = None;
-    
+    let mut is_first_field = false;
+
     // Find the field - it might be preceded by a comma on the previous line
     for (i, line) in lines.iter().enumerate() {
         // Check if this line has a comma followed by our field on the next line
@@ -166,28 +202,29 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
         // Check if this line just has our field (first field in record)
         if line.contains(&format!("{} =", key)) && !line.trim_start().starts_with(',') {
             field_start_idx = Some(i);
+            is_first_field = true;
             break;
         }
     }
-    
+
     if let Some(start_idx) = field_start_idx {
         let mut lines_to_remove = vec![start_idx];
-        
+
         // Check if it's a multi-line value (function or complex expression)
         let field_line = &lines[start_idx];
         let is_function = field_line.contains("\\") || field_line.contains("case") || field_line.contains("if ");
         let is_multiline = is_function || !field_line.trim().ends_with('"');
-        
+
         if is_multiline {
             // Find the end of this field
             let mut j = start_idx + 1;
             let indent_level = count_leading_spaces(&lines[start_idx]);
-            
+
             while j < lines.len() {
                 let current_line = &lines[j];
                 let current_indent = count_leading_spaces(current_line);
                 let trimmed = current_line.trim();
-                
+
                 // Check if we've reached the next field at the same or lower indent level
                 if !trimmed.is_empty() {
                     // Next field at same level (starts with comma or closing brace)
@@ -203,19 +240,19 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
                         }
                     }
                 }
-                
+
                 lines_to_remove.push(j);
                 j += 1;
             }
         }
-        
+
         // Also remove the comma line if it exists and only contains a comma
         if let Some(comma_idx) = comma_line_idx {
             if lines[comma_idx].trim() == "," {
                 lines_to_remove.insert(0, comma_idx);
             }
         }
-        
+
         // Handle the case where we need to fix trailing commas
         // If we're removing the last field before }, we need to remove the comma from the previous field
         if start_idx > 0 && lines_to_remove.len() > 0 {
@@ -229,11 +266,38 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
                 }
             }
         }
-        
+
         // Remove lines in reverse order to maintain indices
         lines_to_remove.sort_by(|a, b| b.cmp(a));
         for &line_idx in lines_to_remove.iter() {
             lines.remove(line_idx);
+        }
+
+        // If we removed the first field, promote the next field to be first
+        if is_first_field {
+            // After removal, find the next field line (starts with comma)
+            // The removed lines are gone, so we search from where the first field was
+            let search_start = if start_idx >= lines_to_remove.len() {
+                start_idx - lines_to_remove.len() + 1
+            } else {
+                0
+            };
+
+            for i in search_start..lines.len() {
+                let line = lines[i].trim();
+                if line.starts_with(',') {
+                    // This is the next field - convert it to first field format
+                    // Change ", fieldName = value" to "  fieldName = value"
+                    let field_line = &lines[i];
+                    let new_line = field_line.replacen(", ", "  ", 1);
+                    lines[i] = new_line;
+                    break;
+                } else if line.starts_with('}') {
+                    // No more fields
+                    break;
+                }
+                // Skip comments and empty lines
+            }
         }
     }
 }
