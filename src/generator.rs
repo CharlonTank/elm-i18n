@@ -13,27 +13,30 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
 
     let content = fs::read_to_string(path)?;
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-    
+
     // Parse the file to find insertion points
     let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
-    
+
     // Add to Translations type
     let type_insertion_line = find_last_field_line(&lines, parse_result.type_start_line, parse_result.type_end_line);
     insert_type_field(&mut lines, type_insertion_line, &translation.key, &translation.type_signature);
-    
+
     // Add to translationsEn
     let en_insertion_line = find_last_field_line(&lines, parse_result.en_start_line, parse_result.en_end_line);
     insert_record_field(&mut lines, en_insertion_line, &translation.key, &translation.en, translation.is_function);
-    
+
     // Add to translationsFr
     let fr_insertion_line = find_last_field_line(&lines, parse_result.fr_start_line, parse_result.fr_end_line);
     insert_record_field(&mut lines, fr_insertion_line, &translation.key, &translation.fr, translation.is_function);
-    
+
     // Write the modified content
     let new_content = lines.join("\n");
     fs::write(path, new_content)
         .with_context(|| format!("Failed to write to {}", path.display()))?;
-    
+
+    // Remove backup file after successful write
+    let _ = fs::remove_file(&backup_path);
+
     Ok(())
 }
 
@@ -111,29 +114,34 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
 
     let content = fs::read_to_string(path)?;
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-    
+
     // Parse the file to find the translation
     let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
-    
+
     // Check if the key exists
     if !parse_result.translations.contains_key(key) {
+        // Remove backup before returning error
+        let _ = fs::remove_file(&backup_path);
         anyhow::bail!("Translation '{}' not found", key);
     }
-    
+
     // Remove from Translations type
     remove_type_field(&mut lines, key);
-    
+
     // Remove from translationsEn
     remove_record_field(&mut lines, key);
-    
-    // Remove from translationsFr  
+
+    // Remove from translationsFr
     remove_record_field(&mut lines, key);
-    
+
     // Write the modified content
     let new_content = lines.join("\n");
     fs::write(path, new_content)
         .with_context(|| format!("Failed to write to {}", path.display()))?;
-    
+
+    // Remove backup file after successful write
+    let _ = fs::remove_file(&backup_path);
+
     Ok(())
 }
 
