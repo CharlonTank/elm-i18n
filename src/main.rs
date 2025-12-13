@@ -282,17 +282,34 @@ fn main() -> Result<()> {
         }
         
         Commands::RemoveUnused { file, src_dir, confirm } => {
-            let actual_file = if file.to_str() == Some("src/I18n.elm") {
-                file_path.clone()
-            } else {
-                file
-            };
             let actual_src_dir = if src_dir.to_str() == Some("src") {
                 config.source_dir().clone()
             } else {
                 src_dir
             };
-            handle_remove_unused(&actual_file, &actual_src_dir, confirm, &record_name)?;
+
+            // In multi-file mode without a target, process all files
+            if cli.target.is_none() {
+                if let Config::MultiFile { files, .. } = &config {
+                    println!("{} Running remove-unused on all translation files...\n", "🔍".blue());
+                    for (shortcut, file_config) in files {
+                        println!("{} Processing {} ({})...", "→".cyan(), shortcut.yellow(), file_config.path.display());
+                        handle_remove_unused(&file_config.path, &actual_src_dir, confirm, &file_config.record_name)?;
+                        println!();
+                    }
+                } else {
+                    // Single file mode
+                    handle_remove_unused(&file_path, &actual_src_dir, confirm, &record_name)?;
+                }
+            } else {
+                // Target was specified, use the determined file
+                let actual_file = if file.to_str() == Some("src/I18n.elm") {
+                    file_path.clone()
+                } else {
+                    file
+                };
+                handle_remove_unused(&actual_file, &actual_src_dir, confirm, &record_name)?;
+            }
         }
         
         Commands::List { file, verbose, filter } => {
@@ -316,7 +333,9 @@ fn main() -> Result<()> {
 fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &Commands) -> Result<(PathBuf, String)> {
     // For Init command, we might allow creation of new files
     let is_init = matches!(command, Commands::Init { .. });
-    
+    // RemoveUnused can work without a target (processes all files)
+    let is_remove_unused = matches!(command, Commands::RemoveUnused { .. });
+
     match config {
         Config::SingleFile { file, record_name, .. } => {
             if shortcut.is_some() {
@@ -337,7 +356,11 @@ fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &C
                     }
                 }
                 None => {
-                    if !is_init {
+                    // RemoveUnused can run without a target - it will process all files
+                    if is_remove_unused {
+                        // Return dummy values - the command handler will iterate all files
+                        Ok((PathBuf::from(""), String::new()))
+                    } else if !is_init {
                         config.print_shortcuts();
                         std::process::exit(1);
                     } else {

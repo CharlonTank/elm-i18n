@@ -632,20 +632,10 @@ pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str) -> 
 
         // Only process .elm files
         if path.is_file() && path.extension().map_or(false, |ext| ext == "elm") {
-            // Skip I18n files themselves
-            if path.file_name().map_or(false, |name| {
-                let name_str = name.to_string_lossy();
-                name_str == "I18n.elm"
-                    || name_str == "App.elm"
-                    || name_str == "LandingPage.elm"
-                    || name_str == "ComingSoon.elm"
-                    || name_str == "Email.elm"
-                    || name_str == "Errors.elm"
-            }) && path.parent().map_or(false, |p| {
-                p.file_name().map_or(false, |pname| pname == "I18n")
-            }) {
-                continue;
-            }
+            // We scan ALL .elm files including I18n files themselves because:
+            // 1. I18n files may use their own keys internally (e.g., error-to-string functions)
+            // 2. The regex pattern only matches dot-access patterns (t.key, tlp.key)
+            //    NOT record field definitions (key = "value")
 
             let content = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read file: {}", path.display()))?;
