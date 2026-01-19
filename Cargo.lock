@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "elm-i18n"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "anyhow",
  "clap",

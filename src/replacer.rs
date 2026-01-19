@@ -643,12 +643,48 @@ pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str) -> 
             // Look for patterns like <var>.<key> where <var> is a short identifier
             // This catches t.key, tlp.key, tcs.key, translations.key, etc.
             // Pattern: word boundary, 1-12 char identifier, dot, then the field name
-            let field_access_pattern = Regex::new(r"\b[a-zA-Z][a-zA-Z0-9_]{0,11}\.([a-zA-Z][a-zA-Z0-9_]*)\b").unwrap();
+            // Uses \p{L} for Unicode letters and \p{N} for Unicode numbers to support accented chars
+            let field_access_pattern = Regex::new(r"(?u)\b[\p{L}_][\p{L}\p{N}_]{0,11}\.([\p{L}_][\p{L}\p{N}_]*)\b").unwrap();
 
             // Find all matches
             for captures in field_access_pattern.captures_iter(&content) {
                 if let Some(key) = captures.get(1) {
                     used_keys.insert(key.as_str().to_string());
+                }
+            }
+
+            // Also look for record field accessor functions like .fieldName
+            // In Elm, .fieldName is a function that extracts that field from a record
+            // Pattern: space/comma/etc followed by .identifier (the accessor function)
+            let accessor_pattern = Regex::new(r"(?u)(?:^|[,=\[\({\s])\.([\p{L}_][\p{L}\p{N}_]*)\b").unwrap();
+            for captures in accessor_pattern.captures_iter(&content) {
+                if let Some(key) = captures.get(1) {
+                    used_keys.insert(key.as_str().to_string());
+                }
+            }
+
+            // Also look for field access after closing paren, like (expression).fieldName
+            // This catches patterns like (I18n.App.translations lang).keyName
+            let paren_access_pattern = Regex::new(r"(?u)\)\.([\p{L}_][\p{L}\p{N}_]*)\b").unwrap();
+            for captures in paren_access_pattern.captures_iter(&content) {
+                if let Some(key) = captures.get(1) {
+                    used_keys.insert(key.as_str().to_string());
+                }
+            }
+
+            // Also look for extensible record type signatures like:
+            // { t | keyName : Type, keyName2 : Type, ... }
+            // This catches keys that are required by type constraints even if not accessed with dot notation
+            // We look for patterns after | in record types, and also keys followed by " : " which is
+            // common in Elm type signatures but NOT in regular assignments (which use " = ")
+            // Skip I18n files to avoid matching the type alias definitions themselves
+            let is_i18n_file = path.to_str().map_or(false, |s| s.contains("I18n"));
+            if !is_i18n_file {
+                let record_type_pattern = Regex::new(r"(?u)[\|\{,]\s*([\p{L}_][\p{L}\p{N}_]*)\s*:\s*(?:String|Int|Bool|Float|List|Maybe|Dict|Array)").unwrap();
+                for captures in record_type_pattern.captures_iter(&content) {
+                    if let Some(key) = captures.get(1) {
+                        used_keys.insert(key.as_str().to_string());
+                    }
                 }
             }
         }

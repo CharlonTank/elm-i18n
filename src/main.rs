@@ -150,16 +150,23 @@ enum Commands {
         /// Path to I18n.elm file (defaults to src/I18n.elm)
         #[arg(long, default_value = "src/I18n.elm")]
         file: PathBuf,
-        
+
         /// Show full translation values
         #[arg(long)]
         verbose: bool,
-        
+
         /// Filter keys by pattern
         #[arg(long)]
         filter: Option<String>,
     },
-    
+
+    /// Find translations with identical values
+    Duplicates {
+        /// Path to I18n.elm file (defaults to src/I18n.elm)
+        #[arg(long, default_value = "src/I18n.elm")]
+        file: PathBuf,
+    },
+
     /// Show version information
     Version,
 }
@@ -293,6 +300,10 @@ fn main() -> Result<()> {
                 if let Config::MultiFile { files, .. } = &config {
                     println!("{} Running remove-unused on all translation files...\n", "🔍".blue());
                     for (shortcut, file_config) in files {
+                        if !file_config.path.exists() {
+                            println!("  {} Skipping {} (file not found)\n", "⚠".yellow(), shortcut);
+                            continue;
+                        }
                         println!("{} Processing {} ({})...", "→".cyan(), shortcut.yellow(), file_config.path.display());
                         handle_remove_unused(&file_config.path, &actual_src_dir, confirm, &file_config.record_name)?;
                         println!();
@@ -320,7 +331,27 @@ fn main() -> Result<()> {
             };
             handle_list(&actual_file, verbose, &filter, &record_name)?
         }
-        
+
+        Commands::Duplicates { file } => {
+            // In multi-file mode without a target, find duplicates across all files
+            if cli.target.is_none() {
+                if let Config::MultiFile { files, .. } = &config {
+                    handle_duplicates_cross_file(files)?;
+                } else {
+                    // Single file mode
+                    handle_duplicates(&file_path, &record_name)?;
+                }
+            } else {
+                // Target was specified, use the determined file
+                let actual_file = if file.to_str() == Some("src/I18n.elm") {
+                    file_path.clone()
+                } else {
+                    file
+                };
+                handle_duplicates(&actual_file, &record_name)?;
+            }
+        }
+
         Commands::Version => unreachable!(),
         Commands::Status => unreachable!(),
         Commands::SetupClaude => unreachable!()
@@ -333,8 +364,9 @@ fn main() -> Result<()> {
 fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &Commands) -> Result<(PathBuf, String)> {
     // For Init command, we might allow creation of new files
     let is_init = matches!(command, Commands::Init { .. });
-    // RemoveUnused can work without a target (processes all files)
+    // RemoveUnused and Duplicates can work without a target (processes all files)
     let is_remove_unused = matches!(command, Commands::RemoveUnused { .. });
+    let is_duplicates = matches!(command, Commands::Duplicates { .. });
 
     match config {
         Config::SingleFile { file, record_name, .. } => {
@@ -356,8 +388,8 @@ fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &C
                     }
                 }
                 None => {
-                    // RemoveUnused can run without a target - it will process all files
-                    if is_remove_unused {
+                    // RemoveUnused and Duplicates can run without a target - they process all files
+                    if is_remove_unused || is_duplicates {
                         // Return dummy values - the command handler will iterate all files
                         Ok((PathBuf::from(""), String::new()))
                     } else if !is_init {
@@ -1156,7 +1188,7 @@ fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_na
         // Simple list
         for (key, translation) in &translations {
             let type_info = if translation.is_function {
-                format!(" ({})", 
+                format!(" ({})",
                     translation.type_signature.as_ref()
                         .unwrap_or(&"Function".to_string())
                         .cyan()
@@ -1164,10 +1196,210 @@ fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_na
             } else {
                 " (String)".cyan().to_string()
             };
-            
+
             println!("  {} {}{}", "•".green(), key.yellow(), type_info);
         }
     }
-    
+
+    Ok(())
+}
+
+fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
+    use std::collections::HashMap;
+
+    if !file.exists() {
+        eprintln!("{} File not found: {}", "✗".red(), file.display());
+        std::process::exit(1);
+    }
+
+    println!("{} Scanning for duplicate translations...", "🔍".blue());
+
+    // Parse the I18n file
+    let parse_result = parse_i18n_file_with_record_name(file, record_name)?;
+
+    // Build a map: (en_value, fr_value) -> Vec<key>
+    let mut value_to_keys: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+    for (key, translation) in parse_result.translations {
+        // Skip function translations - they typically have unique implementations
+        if translation.is_function {
+            continue;
+        }
+
+        let values = (translation.en.clone(), translation.fr.clone());
+        value_to_keys
+            .entry(values)
+            .or_default()
+            .push(key);
+    }
+
+    // Filter to only entries with 2+ keys (actual duplicates)
+    let mut duplicates: Vec<_> = value_to_keys
+        .into_iter()
+        .filter(|(_, keys)| keys.len() >= 2)
+        .collect();
+
+    if duplicates.is_empty() {
+        println!();
+        println!("{} No duplicate translations found", "✓".green());
+        return Ok(());
+    }
+
+    // Sort by number of duplicates (descending), then by EN value
+    duplicates.sort_by(|a, b| {
+        b.1.len().cmp(&a.1.len())
+            .then_with(|| a.0.0.cmp(&b.0.0))
+    });
+
+    // Count total keys that could be consolidated
+    let total_duplicate_keys: usize = duplicates.iter().map(|(_, keys)| keys.len()).sum();
+    let potential_savings = total_duplicate_keys - duplicates.len();
+
+    println!();
+    println!("{} Found {} duplicate group{}:",
+        "📋".blue(),
+        duplicates.len(),
+        if duplicates.len() == 1 { "" } else { "s" }
+    );
+    println!();
+
+    for ((en_value, fr_value), mut keys) in duplicates {
+        keys.sort();
+
+        // Truncate long values for display
+        let display_en = if en_value.len() > 40 {
+            format!("{}...", &en_value[..37])
+        } else {
+            en_value
+        };
+        let display_fr = if fr_value.len() > 40 {
+            format!("{}...", &fr_value[..37])
+        } else {
+            fr_value
+        };
+
+        println!("  {} {} / {}:", "•".green(), display_en, display_fr);
+        for key in &keys {
+            println!("    - {}", key.yellow());
+        }
+        println!();
+    }
+
+    println!("{} {} keys could potentially be consolidated into {}",
+        "✓".green(),
+        total_duplicate_keys,
+        total_duplicate_keys - potential_savings
+    );
+
+    Ok(())
+}
+
+fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileConfig>) -> Result<()> {
+    use std::collections::HashMap;
+
+    println!("{} Scanning for duplicate translations across all files...", "🔍".blue());
+    println!();
+
+    // Build a map: (en_value, fr_value) -> Vec<(file_shortcut, key)>
+    let mut value_to_keys: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+    let mut files_processed = 0;
+    let mut total_keys = 0;
+
+    for (shortcut, file_config) in files {
+        if !file_config.path.exists() {
+            println!("  {} Skipping {} (file not found)", "⚠".yellow(), shortcut);
+            continue;
+        }
+
+        let parse_result = parse_i18n_file_with_record_name(&file_config.path, &file_config.record_name)?;
+        files_processed += 1;
+
+        for (key, translation) in parse_result.translations {
+            // Skip function translations
+            if translation.is_function {
+                continue;
+            }
+
+            total_keys += 1;
+            let values = (translation.en.clone(), translation.fr.clone());
+            value_to_keys
+                .entry(values)
+                .or_default()
+                .push((shortcut.clone(), key));
+        }
+    }
+
+    println!("  Processed {} files with {} translation keys", files_processed, total_keys);
+    println!();
+
+    // Filter to entries that span multiple files
+    let cross_file_duplicates: Vec<_> = value_to_keys
+        .into_iter()
+        .filter(|(_, keys)| {
+            // Check if keys span multiple files
+            let unique_files: std::collections::HashSet<_> = keys.iter().map(|(f, _)| f).collect();
+            unique_files.len() > 1
+        })
+        .collect();
+
+    if cross_file_duplicates.is_empty() {
+        println!("{} No cross-file duplicate translations found", "✓".green());
+        return Ok(());
+    }
+
+    // Sort by number of files involved (descending), then by EN value
+    let mut duplicates = cross_file_duplicates;
+    duplicates.sort_by(|a, b| {
+        let a_files: std::collections::HashSet<_> = a.1.iter().map(|(f, _)| f).collect();
+        let b_files: std::collections::HashSet<_> = b.1.iter().map(|(f, _)| f).collect();
+        b_files.len().cmp(&a_files.len())
+            .then_with(|| b.1.len().cmp(&a.1.len()))
+            .then_with(|| a.0.0.cmp(&b.0.0))
+    });
+
+    let total_duplicate_keys: usize = duplicates.iter().map(|(_, keys)| keys.len()).sum();
+
+    println!("{} Found {} cross-file duplicate group{}:",
+        "📋".blue(),
+        duplicates.len(),
+        if duplicates.len() == 1 { "" } else { "s" }
+    );
+    println!();
+
+    for ((en_value, fr_value), mut keys) in duplicates {
+        // Sort keys by file then key name
+        keys.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        // Truncate long values for display
+        let display_en = if en_value.len() > 40 {
+            format!("{}...", &en_value[..37])
+        } else {
+            en_value
+        };
+        let display_fr = if fr_value.len() > 40 {
+            format!("{}...", &fr_value[..37])
+        } else {
+            fr_value
+        };
+
+        // Group by file for display
+        let mut current_file = String::new();
+        println!("  {} {} / {}:", "•".green(), display_en, display_fr);
+        for (file_shortcut, key) in &keys {
+            if file_shortcut != &current_file {
+                current_file = file_shortcut.clone();
+                println!("    [{}]", file_shortcut.cyan());
+            }
+            println!("      - {}", key.yellow());
+        }
+        println!();
+    }
+
+    println!("{} {} keys across files share the same translations",
+        "✓".green(),
+        total_duplicate_keys
+    );
+    println!("   Consider consolidating into a shared I18n module");
+
     Ok(())
 }

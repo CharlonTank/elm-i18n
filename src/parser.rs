@@ -26,7 +26,7 @@ pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str) -> Resul
     let type_fields = parse_type_fields(&lines, type_bounds.0, type_bounds.1)?;
     let en_fields = parse_record_fields(&lines, en_bounds.0, en_bounds.1)?;
     let fr_fields = parse_record_fields(&lines, fr_bounds.0, fr_bounds.1)?;
-    
+
     // Build translation map
     let mut translations = HashMap::new();
     
@@ -119,63 +119,94 @@ fn find_translation_record_with_type(lines: &[&str], name: &str, record_type: &s
 fn parse_type_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<TypeField>> {
     let mut fields = Vec::new();
     let field_regex = Regex::new(r"^\s*,?\s*(\w+)\s*:\s*(.+)$")?;
-    
+
+    // Track brace depth to only capture top-level fields
+    // Depth 0 = before first {, Depth 1 = inside top-level record, Depth 2+ = inside nested records
+    let mut brace_depth = 0;
+
     for i in (start + 1)..end {
         let line = lines[i];
-        if let Some(captures) = field_regex.captures(line) {
-            fields.push(TypeField {
-                name: captures[1].to_string(),
-                type_annotation: captures[2].trim().to_string(),
-            });
+
+        // Update brace depth BEFORE checking for field
+        // Count opening braces
+        let open_braces = line.matches('{').count();
+        let close_braces = line.matches('}').count();
+
+        // Only capture fields at depth 1 (top level of the record)
+        // We need to be at depth 1 before the line's braces are processed
+        let current_depth = brace_depth;
+
+        // Update depth after capturing current depth
+        brace_depth += open_braces;
+        brace_depth = brace_depth.saturating_sub(close_braces);
+
+        // Only capture fields at the top level (depth 1)
+        // Note: first line with { puts us at depth 1, so fields are at depth 1
+        if current_depth == 1 || (current_depth == 0 && open_braces > 0) {
+            if let Some(captures) = field_regex.captures(line) {
+                fields.push(TypeField {
+                    name: captures[1].to_string(),
+                    type_annotation: captures[2].trim().to_string(),
+                });
+            }
         }
     }
-    
+
     Ok(fields)
 }
 
 fn parse_record_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<RecordField>> {
     let mut fields = Vec::new();
     let field_regex = Regex::new(r"^\s*,?\s*(\w+)\s*=\s*(.*)$")?;
-    
+    // Regex to detect if a line starts a new field (starts with optional comma then identifier = ...)
+    let new_field_regex = Regex::new(r"^\s*,?\s*\w+\s*=")?;
+
     let mut i = start + 1;
     while i < end {
         let line = lines[i];
-        
+
         if let Some(captures) = field_regex.captures(line) {
             let name = captures[1].to_string();
             let mut value = captures[2].to_string();
-            
-            // Check if this is a multiline value (function)
-            if value.starts_with('\\') || value.contains("case") {
-                let mut j = i;
-                
-                // Collect all lines until we find the end of the function
-                while j < end {
-                    if j > i {
+
+            // Check if this is a multiline value (function or case expression)
+            // Only treat as multiline if the next line doesn't start a new field
+            if (value.starts_with('\\') || value.contains("case")) && i + 1 < end {
+                // Check if next line is a continuation (not a new field)
+                let next_line = lines[i + 1];
+                if !new_field_regex.is_match(next_line) {
+                    let mut j = i + 1;
+
+                    // Collect all lines until we find a new field
+                    while j < end {
+                        let current = lines[j];
+
+                        // Stop if this line starts a new field
+                        if new_field_regex.is_match(current) {
+                            break;
+                        }
+
+                        // Add this line to the value
                         value.push('\n');
-                        value.push_str(&format!("        {}", lines[j].trim_start()));
+                        value.push_str(&format!("        {}", current.trim_start()));
+
+                        j += 1;
                     }
-                    
-                    // Simple heuristic: look for a line that doesn't start with whitespace
-                    // after we've started collecting
-                    if j > i && !lines[j + 1].starts_with("        ") {
-                        i = j;
-                        break;
-                    }
-                    
-                    j += 1;
+
+                    // Position i at the last line we consumed
+                    i = j - 1;
                 }
             }
-            
+
             fields.push(RecordField {
                 name,
                 value: value.trim().to_string(),
             });
         }
-        
+
         i += 1;
     }
-    
+
     Ok(fields)
 }
 
