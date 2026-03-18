@@ -1,4 +1,3 @@
-
 pub fn get_i18n_template_with_record_name(languages: &[String], record_name: &str) -> String {
     let mut template = String::from(
         r#"module I18n exposing (..)

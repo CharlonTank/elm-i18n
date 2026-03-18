@@ -4,9 +4,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::types::{ParseResult, Translation, TypeField, RecordField};
+use crate::types::{ParseResult, RecordField, Translation, TypeField};
 
-pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str, languages: &[String]) -> Result<ParseResult> {
+pub fn parse_i18n_file_with_record_name(
+    path: &Path,
+    record_name: &str,
+    languages: &[String],
+) -> Result<ParseResult> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read file: {}", path.display()))?;
 
@@ -21,8 +25,12 @@ pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str, language
 
     for lang in languages {
         let capitalized = capitalize_first(lang);
-        let bounds = find_translation_record_with_type(&lines, &format!("translations{}", capitalized), record_name)
-            .or_else(|_| find_translation_record_with_type(&lines, lang, record_name))?;
+        let bounds = find_translation_record_with_type(
+            &lines,
+            &format!("translations{}", capitalized),
+            record_name,
+        )
+        .or_else(|_| find_translation_record_with_type(&lines, lang, record_name))?;
         let fields = parse_record_fields(&lines, bounds.0, bounds.1)?;
         lang_bounds.push((lang.clone(), bounds.0, bounds.1));
         lang_fields.insert(lang.clone(), fields);
@@ -37,7 +45,8 @@ pub fn parse_i18n_file_with_record_name(path: &Path, record_name: &str, language
     for type_field in &type_fields {
         let mut values = HashMap::new();
         for lang in languages {
-            let value = lang_fields.get(lang)
+            let value = lang_fields
+                .get(lang)
                 .and_then(|fields| fields.iter().find(|f| f.name == type_field.name))
                 .map(|f| f.value.clone())
                 .unwrap_or_default();
@@ -100,7 +109,11 @@ fn find_type_definition_with_name(lines: &[&str], record_name: &str) -> Result<(
     anyhow::bail!("Could not find {} type definition", record_name)
 }
 
-fn find_translation_record_with_type(lines: &[&str], name: &str, record_type: &str) -> Result<(usize, usize)> {
+fn find_translation_record_with_type(
+    lines: &[&str],
+    name: &str,
+    record_type: &str,
+) -> Result<(usize, usize)> {
     let mut start = None;
     let mut brace_count = 0;
 
@@ -150,7 +163,8 @@ fn parse_type_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<Typ
         // Only capture fields at the top level (depth 1)
         // Note: first line with { puts us at depth 1, so fields are at depth 1
         if current_depth == 1 || (current_depth == 0 && open_braces > 0) {
-            if let Some(captures) = field_regex.captures(line) {
+            let normalized_line = strip_leading_record_brace(line);
+            if let Some(captures) = field_regex.captures(normalized_line) {
                 fields.push(TypeField {
                     name: captures[1].to_string(),
                     type_annotation: captures[2].trim().to_string(),
@@ -171,8 +185,9 @@ fn parse_record_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<R
     let mut i = start + 1;
     while i < end {
         let line = lines[i];
+        let normalized_line = strip_leading_record_brace(line);
 
-        if let Some(captures) = field_regex.captures(line) {
+        if let Some(captures) = field_regex.captures(normalized_line) {
             let name = captures[1].to_string();
             let mut value = captures[2].to_string();
 
@@ -217,7 +232,19 @@ fn parse_record_fields(lines: &[&str], start: usize, end: usize) -> Result<Vec<R
     Ok(fields)
 }
 
-pub fn check_key_exists_with_record_name(path: &Path, key: &str, record_name: &str, languages: &[String]) -> Result<Option<Translation>> {
+fn strip_leading_record_brace(line: &str) -> &str {
+    line.trim_start()
+        .strip_prefix('{')
+        .map(str::trim_start)
+        .unwrap_or(line)
+}
+
+pub fn check_key_exists_with_record_name(
+    path: &Path,
+    key: &str,
+    record_name: &str,
+    languages: &[String],
+) -> Result<Option<Translation>> {
     let result = parse_i18n_file_with_record_name(path, record_name, languages)?;
     Ok(result.translations.get(key).cloned())
 }

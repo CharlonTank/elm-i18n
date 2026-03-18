@@ -222,6 +222,7 @@ elm-i18n duplicate-keys
 ```bash
 elm-i18n shared-values
 # Reports keys where multiple languages currently share the same value
+# or the same function implementation
 
 elm-i18n shared-values --suppress
 # Stores the current findings in ./elm-i18n/suppressed.json

@@ -2011,10 +2011,6 @@ fn find_keys_with_shared_language_values(
     let mut keys_with_shared_values = Vec::new();
 
     for (key, translation) in translations {
-        if translation.is_function {
-            continue;
-        }
-
         let groups = find_shared_language_value_groups(&translation.values, languages);
         if !groups.is_empty() {
             keys_with_shared_values.push(KeySharedLanguageValues {
@@ -2103,6 +2099,10 @@ fn truncate_for_display(value: &str, max_chars: usize) -> String {
 
     let truncated: String = value.chars().take(max_chars - 3).collect();
     format!("{}...", truncated)
+}
+
+fn compact_value_for_display(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn shared_values_summary(total_visible_groups: usize) -> String {
@@ -2205,9 +2205,7 @@ fn is_shared_values_suppressed(
     _group: &SharedLanguageValueGroup,
 ) -> bool {
     suppressions.entries.iter().any(|entry| {
-        entry.check == SHARED_VALUES_CHECK_NAME
-            && entry.file_path == file_path
-            && entry.key == key
+        entry.check == SHARED_VALUES_CHECK_NAME && entry.file_path == file_path && entry.key == key
     })
 }
 
@@ -2357,7 +2355,7 @@ fn print_shared_value_findings(findings: &[KeySharedLanguageValues], suppressed_
             println!(
                 "    - {}: {}",
                 format_language_codes(&group.languages).cyan(),
-                truncate_for_display(&group.value, 50)
+                truncate_for_display(&compact_value_for_display(&group.value), 50)
             );
         }
         println!();
@@ -2393,7 +2391,7 @@ fn print_cross_file_shared_value_findings(
             println!(
                 "    - {}: {}",
                 format_language_codes(&group.languages).cyan(),
-                truncate_for_display(&group.value, 50)
+                truncate_for_display(&compact_value_for_display(&group.value), 50)
             );
         }
         println!();
@@ -2935,7 +2933,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unique_function_and_missing_values_when_finding_shared_language_values() {
+    fn finds_shared_values_for_functions_and_ignores_missing_values() {
         let languages = vec!["en".to_string(), "fr".to_string(), "es".to_string()];
         let mut translations = HashMap::new();
 
@@ -2996,10 +2994,85 @@ mod tests {
 
         assert_eq!(
             keys,
+            vec![
+                KeySharedLanguageValues {
+                    key: "brandName".to_string(),
+                    groups: vec![SharedLanguageValueGroup {
+                        value: "\"Cleemo\"".to_string(),
+                        languages: vec!["en".to_string(), "fr".to_string()],
+                    }],
+                },
+                KeySharedLanguageValues {
+                    key: "formatDate".to_string(),
+                    groups: vec![SharedLanguageValueGroup {
+                        value: "\\\\d -> format d".to_string(),
+                        languages: vec!["en".to_string(), "fr".to_string(), "es".to_string()],
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_shared_values_for_anonymous_functions_from_parsed_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let i18n_file = temp_dir.path().join("I18n.elm");
+        let languages = vec!["en".to_string(), "fr".to_string(), "es".to_string()];
+
+        std::fs::write(
+            &i18n_file,
+            r#"module I18n exposing (..)
+
+type Language
+    = EN
+    | FR
+    | ES
+
+type Status
+    = Active
+    | Inactive
+
+type alias Translations =
+    { statusMessage : Status -> String
+    }
+
+translationsEn : Translations
+translationsEn =
+    { statusMessage = \status -> case status of
+            Active -> "Active"
+            Inactive -> "Inactive"
+    }
+
+translationsFr : Translations
+translationsFr =
+    { statusMessage = \status -> case status of
+            Active -> "Active"
+            Inactive -> "Inactive"
+    }
+
+translationsEs : Translations
+translationsEs =
+    { statusMessage = \status -> case status of
+            Active -> "Activo"
+            Inactive -> "Inactivo"
+    }
+"#,
+        )
+        .unwrap();
+
+        let parse_result =
+            parse_i18n_file_with_record_name(&i18n_file, "Translations", &languages).unwrap();
+        let keys = find_keys_with_shared_language_values(&parse_result.translations, &languages);
+
+        assert_eq!(
+            keys,
             vec![KeySharedLanguageValues {
-                key: "brandName".to_string(),
+                key: "statusMessage".to_string(),
                 groups: vec![SharedLanguageValueGroup {
-                    value: "\"Cleemo\"".to_string(),
+                    value: r#"\status -> case status of
+        Active -> "Active"
+        Inactive -> "Inactive""#
+                        .to_string(),
                     languages: vec!["en".to_string(), "fr".to_string()],
                 }],
             }]

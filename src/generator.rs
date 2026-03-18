@@ -5,7 +5,12 @@ use std::path::Path;
 use crate::parser::parse_i18n_file_with_record_name;
 use crate::types::Translation;
 
-pub fn add_translation_with_record_name(path: &Path, translation: &Translation, record_name: &str, languages: &[String]) -> Result<()> {
+pub fn add_translation_with_record_name(
+    path: &Path,
+    translation: &Translation,
+    record_name: &str,
+    languages: &[String],
+) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -24,14 +29,33 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
     sorted_bounds.sort_by(|a, b| b.1.cmp(&a.1));
 
     for (lang, start, end) in &sorted_bounds {
-        let value = translation.values.get(lang).map(|s| s.as_str()).unwrap_or("");
+        let value = translation
+            .values
+            .get(lang)
+            .map(|s| s.as_str())
+            .unwrap_or("");
         let insertion_line = find_last_field_line(&lines, *start, *end);
-        insert_record_field(&mut lines, insertion_line, &translation.key, value, translation.is_function);
+        insert_record_field(
+            &mut lines,
+            insertion_line,
+            &translation.key,
+            value,
+            translation.is_function,
+        );
     }
 
     // Last: insert into type definition (comes before language records in the file)
-    let type_insertion_line = find_last_field_line(&lines, parse_result.type_start_line, parse_result.type_end_line);
-    insert_type_field(&mut lines, type_insertion_line, &translation.key, &translation.type_signature);
+    let type_insertion_line = find_last_field_line(
+        &lines,
+        parse_result.type_start_line,
+        parse_result.type_end_line,
+    );
+    insert_type_field(
+        &mut lines,
+        type_insertion_line,
+        &translation.key,
+        &translation.type_signature,
+    );
 
     // Write the modified content
     let mut new_content = lines.join("\n");
@@ -74,18 +98,28 @@ fn find_last_field_line(lines: &[String], start: usize, end: usize) -> usize {
     start
 }
 
-fn insert_type_field(lines: &mut Vec<String>, after_line: usize, key: &str, type_sig: &Option<String>) {
-    let type_annotation = type_sig.as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("String");
+fn insert_type_field(
+    lines: &mut Vec<String>,
+    after_line: usize,
+    key: &str,
+    type_sig: &Option<String>,
+) {
+    let type_annotation = type_sig.as_ref().map(|s| s.as_str()).unwrap_or("String");
     let new_line = format!("    , {} : {}", key, type_annotation);
     lines.insert(after_line + 1, new_line);
 }
 
-fn insert_record_field(lines: &mut Vec<String>, after_line: usize, key: &str, value: &str, is_function: bool) {
+fn insert_record_field(
+    lines: &mut Vec<String>,
+    after_line: usize,
+    key: &str,
+    value: &str,
+    is_function: bool,
+) {
     if is_function {
         // Handle multiline function definitions
-        let indented_value = value.lines()
+        let indented_value = value
+            .lines()
             .enumerate()
             .map(|(i, line)| {
                 if i == 0 {
@@ -128,7 +162,12 @@ pub fn create_i18n_file(path: &Path, template: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: &str, languages: &[String]) -> Result<()> {
+pub fn remove_translation_with_record_name(
+    path: &Path,
+    key: &str,
+    record_name: &str,
+    languages: &[String],
+) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -221,7 +260,10 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
     // Find the field - it might be preceded by a comma on the previous line
     for (i, line) in lines.iter().enumerate() {
         // Check if this line has a comma followed by our field on the next line
-        if i + 1 < lines.len() && line.trim().ends_with(',') && lines[i + 1].contains(&format!("{} =", key)) {
+        if i + 1 < lines.len()
+            && line.trim().ends_with(',')
+            && lines[i + 1].contains(&format!("{} =", key))
+        {
             comma_line_idx = Some(i);
             field_start_idx = Some(i + 1);
             break;
@@ -244,7 +286,8 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
 
         // Check if it's a multi-line value (function or complex expression)
         let field_line = &lines[start_idx];
-        let is_function = field_line.contains("\\") || field_line.contains("case") || field_line.contains("if ");
+        let is_function =
+            field_line.contains("\\") || field_line.contains("case") || field_line.contains("if ");
         let is_multiline = is_function || !field_line.trim().ends_with('"');
 
         if is_multiline {
@@ -260,11 +303,16 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
                 // Check if we've reached the next field at the same or lower indent level
                 if !trimmed.is_empty() {
                     // Next field at same level (starts with comma or closing brace)
-                    if current_indent <= indent_level && (trimmed.starts_with(',') || trimmed.starts_with('}')) {
+                    if current_indent <= indent_level
+                        && (trimmed.starts_with(',') || trimmed.starts_with('}'))
+                    {
                         break;
                     }
                     // For fields inside the record, check for field assignment at similar indent
-                    if current_indent <= indent_level + 4 && trimmed.contains(" = ") && !trimmed.starts_with("case ") {
+                    if current_indent <= indent_level + 4
+                        && trimmed.contains(" = ")
+                        && !trimmed.starts_with("case ")
+                    {
                         // This might be the next field if it's not inside a case expression
                         let before_eq = trimmed.split(" = ").next().unwrap_or("");
                         if before_eq.chars().all(|c| c.is_alphanumeric() || c == '_') {
@@ -289,12 +337,17 @@ fn remove_record_field(lines: &mut Vec<String>, key: &str) {
         // If we're removing the last field before }, we need to remove the comma from the previous field
         if start_idx > 0 && lines_to_remove.len() > 0 {
             let last_removed_idx = *lines_to_remove.last().unwrap();
-            if last_removed_idx + 1 < lines.len() && lines[last_removed_idx + 1].trim().starts_with('}') {
+            if last_removed_idx + 1 < lines.len()
+                && lines[last_removed_idx + 1].trim().starts_with('}')
+            {
                 // Check if previous field ends with comma
                 let prev_field_idx = start_idx - 1;
                 if lines[prev_field_idx].trim().ends_with(',') {
                     // Remove the trailing comma
-                    lines[prev_field_idx] = lines[prev_field_idx].trim_end().trim_end_matches(',').to_string();
+                    lines[prev_field_idx] = lines[prev_field_idx]
+                        .trim_end()
+                        .trim_end_matches(',')
+                        .to_string();
                 }
             }
         }
@@ -404,7 +457,8 @@ translationsFr =
         fs::write(&i18n_file, content).unwrap();
 
         let languages = vec!["en".to_string(), "fr".to_string()];
-        remove_translation_with_record_name(&i18n_file, "ticketStatus", "Translations", &languages).unwrap();
+        remove_translation_with_record_name(&i18n_file, "ticketStatus", "Translations", &languages)
+            .unwrap();
 
         // Read the result
         let result = fs::read_to_string(&i18n_file).unwrap();
@@ -418,8 +472,10 @@ translationsFr =
         assert!(result.contains(r#"Ticket.Urgent -> "Urgent""#));
 
         // Verify the structure is still valid (no orphaned lambdas)
-        assert!(!result.contains(r#"Ticket.Urgent -> "Urgent"
-    \status ->"#));
+        assert!(!result.contains(
+            r#"Ticket.Urgent -> "Urgent"
+    \status ->"#
+        ));
 
         // Verify other fields are intact
         assert!(result.contains(r#"welcome = "Welcome""#));
@@ -478,7 +534,8 @@ translationsFr =
         fs::write(&i18n_file, content).unwrap();
 
         let languages = vec!["en".to_string(), "fr".to_string()];
-        remove_translation_with_record_name(&i18n_file, "simpleField", "Translations", &languages).unwrap();
+        remove_translation_with_record_name(&i18n_file, "simpleField", "Translations", &languages)
+            .unwrap();
 
         let result = fs::read_to_string(&i18n_file).unwrap();
 
@@ -535,17 +592,22 @@ translationsFr =
             type_signature: None,
         };
 
-        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages).unwrap();
+        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages)
+            .unwrap();
 
         let result = fs::read_to_string(&i18n_file).unwrap();
 
         // The new field should NOT be inserted in the middle of the case branches
-        assert!(!result.contains(r#""high" -> "High"
-    , newField"#));
+        assert!(!result.contains(
+            r#""high" -> "High"
+    , newField"#
+        ));
 
         // The new field should be after the case expression's last branch
-        assert!(result.contains(r#"_ -> "Normal"
-    , newField = "Hello""#));
+        assert!(result.contains(
+            r#"_ -> "Normal"
+    , newField = "Hello""#
+        ));
 
         // Type definition should be correct
         assert!(result.contains("newField : String"));
@@ -572,9 +634,13 @@ translationsFr =
             type_signature: None,
         };
 
-        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages).unwrap();
+        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages)
+            .unwrap();
 
         let result = fs::read_to_string(&i18n_file).unwrap();
-        assert!(result.ends_with('\n'), "File should preserve trailing newline");
+        assert!(
+            result.ends_with('\n'),
+            "File should preserve trailing newline"
+        );
     }
 }
