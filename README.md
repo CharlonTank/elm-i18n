@@ -10,6 +10,7 @@ A command-line tool for managing internationalization (i18n) translations in Elm
 - ✅ Remove translations
 - ✅ Remove all unused translations
 - ✅ List all translations with filtering
+- ✅ Detect keys whose value is identical across multiple languages
 - ✅ Initialize new I18n.elm files
 - ✅ Shows existing translations when key already exists
 - ✅ Maintains proper Elm formatting
@@ -63,7 +64,7 @@ cargo install --path .
 elm-i18n setup
 ```
 
-This interactive command creates an `elm-i18n.json` configuration file. Choose between:
+This interactive command creates an `elm-i18n/config.json` configuration file. Choose between:
 - **Single-file mode**: One I18n.elm file for all translations
 - **Multi-file mode**: Separate files for different parts of your app
 
@@ -207,6 +208,24 @@ elm-i18n list --verbose
 elm-i18n list --filter "ticket"
 # 📋 Found 1 translation:
 #   • ticketStatus (Ticket.Status -> String)
+```
+
+### Find duplicate translations
+
+```bash
+elm-i18n duplicate-keys
+# Reports only groups of keys that have the exact same translations
+```
+
+### Find values shared by multiple languages within the same key
+
+```bash
+elm-i18n shared-values
+# Reports keys where multiple languages currently share the same value
+
+elm-i18n shared-values --suppress
+# Stores the current findings in ./elm-i18n/suppressed.json
+# and keeps local state in ./elm-i18n/config.json
 ```
 
 ### Specify a custom file location

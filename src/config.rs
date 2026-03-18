@@ -1,11 +1,11 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
+use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use colored::*;
 
-const CONFIG_FILE_NAME: &str = "elm-i18n.json";
+const CONFIG_FILE_NAME: &str = "elm-i18n/config.json";
 const ELM_I18N_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,94 +44,117 @@ impl Config {
     /// Load config from current directory
     pub fn load() -> Result<Option<Self>> {
         let config_path = Path::new(CONFIG_FILE_NAME);
-        
+
         if !config_path.exists() {
             return Ok(None);
         }
-        
+
         let content = fs::read_to_string(config_path)
-            .with_context(|| format!("Failed to read {}", CONFIG_FILE_NAME))?;
-            
-        let config: Config = serde_json::from_str(&content)
-            .with_context(|| format!("Failed to parse {}. Please check the JSON syntax.", CONFIG_FILE_NAME))?;
-            
+            .with_context(|| format!("Failed to read {}", config_path.display()))?;
+
+        let config: Config = serde_json::from_str(&content).with_context(|| {
+            format!(
+                "Failed to parse {}. Please check the JSON syntax.",
+                config_path.display()
+            )
+        })?;
+
         config.validate()?;
-        
+
         Ok(Some(config))
     }
-    
+
     /// Save config to current directory
     pub fn save(&self) -> Result<()> {
         let config_path = Path::new(CONFIG_FILE_NAME);
-        let content = serde_json::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-            
+        let content = serde_json::to_string_pretty(self).context("Failed to serialize config")?;
+
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+        }
+
         fs::write(config_path, content)
-            .with_context(|| format!("Failed to write {}", CONFIG_FILE_NAME))?;
-            
+            .with_context(|| format!("Failed to write {}", config_path.display()))?;
+
         Ok(())
     }
-    
+
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         match self {
-            Config::SingleFile { elm_i18n_version, languages, file, .. } => {
+            Config::SingleFile {
+                elm_i18n_version,
+                languages,
+                file,
+                ..
+            } => {
                 // Just warn if version is different, don't fail
                 let current_version = ELM_I18N_VERSION;
                 if !elm_i18n_version.starts_with(&current_version[..3]) {
-                    eprintln!("⚠ Config was created with elm-i18n v{}, current version is v{}", 
-                        elm_i18n_version.yellow(), current_version.yellow());
+                    eprintln!(
+                        "⚠ Config was created with elm-i18n v{}, current version is v{}",
+                        elm_i18n_version.yellow(),
+                        current_version.yellow()
+                    );
                 }
-                
+
                 if languages.is_empty() {
                     bail!("At least one language must be specified");
                 }
-                
+
                 if file.to_str().unwrap_or("").is_empty() {
                     bail!("File path cannot be empty");
                 }
             }
-            Config::MultiFile { elm_i18n_version, languages, files, .. } => {
+            Config::MultiFile {
+                elm_i18n_version,
+                languages,
+                files,
+                ..
+            } => {
                 // Just warn if version is different, don't fail
                 let current_version = ELM_I18N_VERSION;
                 if !elm_i18n_version.starts_with(&current_version[..3]) {
-                    eprintln!("⚠ Config was created with elm-i18n v{}, current version is v{}", 
-                        elm_i18n_version.yellow(), current_version.yellow());
+                    eprintln!(
+                        "⚠ Config was created with elm-i18n v{}, current version is v{}",
+                        elm_i18n_version.yellow(),
+                        current_version.yellow()
+                    );
                 }
-                
+
                 if languages.is_empty() {
                     bail!("At least one language must be specified");
                 }
-                
+
                 if files.is_empty() {
                     bail!("At least one file must be configured in multi-file mode");
                 }
-                
+
                 // Validate shortcuts
                 for (shortcut, file_config) in files {
                     if shortcut.is_empty() {
                         bail!("File shortcuts cannot be empty");
                     }
-                    
+
                     if shortcut.contains('-') || shortcut.contains(' ') {
                         bail!("File shortcut '{}' contains invalid characters. Use only letters, numbers, and underscores.", shortcut);
                     }
-                    
+
                     if file_config.path.to_str().unwrap_or("").is_empty() {
                         bail!("File path for shortcut '{}' cannot be empty", shortcut);
                     }
-                    
+
                     if file_config.record_name.is_empty() {
                         bail!("Record name for shortcut '{}' cannot be empty", shortcut);
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
-    
-    
+
     /// Get source directory
     pub fn source_dir(&self) -> &PathBuf {
         match self {
@@ -147,18 +170,18 @@ impl Config {
             Config::MultiFile { languages, .. } => languages,
         }
     }
-    
-    
+
     /// Check if in multi-file mode
     pub fn is_multi_file(&self) -> bool {
         matches!(self, Config::MultiFile { .. })
     }
-    
+
     /// Get all available shortcuts (for help text)
     pub fn get_shortcuts(&self) -> Vec<(String, PathBuf)> {
         match self {
             Config::MultiFile { files, .. } => {
-                let mut shortcuts: Vec<_> = files.iter()
+                let mut shortcuts: Vec<_> = files
+                    .iter()
                     .map(|(k, v)| (k.clone(), v.path.clone()))
                     .collect();
                 shortcuts.sort_by(|a, b| a.0.cmp(&b.0));
@@ -167,28 +190,38 @@ impl Config {
             _ => vec![],
         }
     }
-    
+
     /// Print available shortcuts (for error messages)
     pub fn print_shortcuts(&self) {
         if let Config::MultiFile { files, .. } = self {
-            println!("{} Multi-file mode requires a file shortcut.", "Error:".red());
+            println!(
+                "{} Multi-file mode requires a file shortcut.",
+                "Error:".red()
+            );
             println!("Available shortcuts:");
-            
+
             let mut shortcuts: Vec<_> = files.iter().collect();
             shortcuts.sort_by(|a, b| a.0.cmp(b.0));
-            
+
             for (shortcut, config) in shortcuts {
-                println!("  {} → {}", 
+                println!(
+                    "  {} → {}",
                     format!("--{}", shortcut).yellow(),
                     config.path.display()
                 );
             }
-            
+
             println!();
-            println!("Example: elm-i18n {} add myKey -t en=\"...\" -t fr=\"...\"",
-                "--<shortcut>".yellow());
+            println!(
+                "Example: elm-i18n {} add myKey -t en=\"...\" -t fr=\"...\"",
+                "--<shortcut>".yellow()
+            );
         }
     }
+}
+
+pub fn config_file_path() -> &'static str {
+    CONFIG_FILE_NAME
 }
 
 /// Check if config exists
@@ -198,9 +231,16 @@ pub fn config_exists() -> bool {
 
 /// Prompt user to create config
 pub fn prompt_setup_message() {
-    eprintln!("{} No elm-i18n.json configuration found.", "✗".red());
+    eprintln!(
+        "{} No elm-i18n configuration found at {}.",
+        "✗".red(),
+        config_file_path().yellow()
+    );
     eprintln!();
-    eprintln!("Please run {} to create a configuration file.", "elm-i18n setup".yellow());
+    eprintln!(
+        "Please run {} to create a configuration file.",
+        "elm-i18n setup".yellow()
+    );
     eprintln!();
     eprintln!("This will guide you through setting up:");
     eprintln!("  • Single-file or multi-file translation mode");

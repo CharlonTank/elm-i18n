@@ -38,12 +38,13 @@ echo
 
 # Test 2: Setup prompt when no config
 test_header "No Config Error"
-$ELM_I18N add test --en "Test" --fr "Test" 2>&1 | grep -q "No elm-i18n.json configuration found" && success "Prompts for setup when no config" || failure "Should prompt for setup"
+$ELM_I18N add test --en "Test" --fr "Test" 2>&1 | grep -q "No elm-i18n configuration found at elm-i18n/config.json" && success "Prompts for setup when no config" || failure "Should prompt for setup"
 echo
 
 # Test 3: Single-file configuration
 test_header "Single-File Mode Setup"
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "single-file",
@@ -104,7 +105,8 @@ echo
 # Test 10: Multi-file configuration
 test_header "Multi-File Mode Setup"
 cd ../multi
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "multi-file",
@@ -185,7 +187,8 @@ echo
 # Test 18: Test with replacement
 test_header "String Replacement"
 cd ../replace
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "single-file",
@@ -222,7 +225,8 @@ cd ../error-cases
 ! $ELM_I18N list 2>/dev/null && success "Fails without config" || failure "Should fail without config"
 
 # Invalid key names
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "single-file",
@@ -254,7 +258,8 @@ echo
 # Test 22: Remove unused (needs actual unused keys)
 test_header "Remove Unused Keys"
 cd ../unused
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "single-file",
@@ -287,7 +292,8 @@ echo
 # Test 23: Complex function translations
 test_header "Complex Function Translations"
 cd ../functions
-cat > elm-i18n.json << 'EOF'
+mkdir -p elm-i18n
+cat > elm-i18n/config.json << 'EOF'
 {
   "version": "1.0",
   "mode": "single-file",
