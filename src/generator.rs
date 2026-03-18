@@ -12,6 +12,7 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
         .with_context(|| format!("Failed to create backup at {}", backup_path.display()))?;
 
     let content = fs::read_to_string(path)?;
+    let has_trailing_newline = content.ends_with('\n');
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Parse the file to find insertion points
@@ -33,7 +34,10 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
     insert_type_field(&mut lines, type_insertion_line, &translation.key, &translation.type_signature);
 
     // Write the modified content
-    let new_content = lines.join("\n");
+    let mut new_content = lines.join("\n");
+    if has_trailing_newline {
+        new_content.push('\n');
+    }
     fs::write(path, new_content)
         .with_context(|| format!("Failed to write to {}", path.display()))?;
 
@@ -44,11 +48,26 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
 }
 
 fn find_last_field_line(lines: &[String], start: usize, end: usize) -> usize {
-    // Find the last line with a field definition before the closing brace
+    // Find the last line with a field definition before the closing brace.
+    // Matches both value records (field = value) and type definitions (field : Type).
+    let field_regex = regex::Regex::new(r"^\s*[,{]\s*\w+\s*[=:]\s*").unwrap();
+
     for i in (start..end).rev() {
         let line = &lines[i];
-        if line.contains(" = ") || line.contains(" : ") {
-            return i;
+        if field_regex.is_match(line) {
+            // Found the last field definition line.
+            // Now skip forward past any continuation lines (multiline values like case expressions).
+            let mut last_line = i;
+            for j in (i + 1)..end {
+                let next = lines[j].trim();
+                // Stop at closing brace or the next field definition
+                if next.starts_with('}') || field_regex.is_match(&lines[j]) {
+                    break;
+                }
+                // This is a continuation line of the current field's value
+                last_line = j;
+            }
+            return last_line;
         }
     }
     // If no fields found, insert after the opening brace
@@ -116,6 +135,7 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
         .with_context(|| format!("Failed to create backup at {}", backup_path.display()))?;
 
     let content = fs::read_to_string(path)?;
+    let has_trailing_newline = content.ends_with('\n');
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Parse the file to find the translation
@@ -137,7 +157,10 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
     }
 
     // Write the modified content
-    let new_content = lines.join("\n");
+    let mut new_content = lines.join("\n");
+    if has_trailing_newline {
+        new_content.push('\n');
+    }
     fs::write(path, new_content)
         .with_context(|| format!("Failed to write to {}", path.display()))?;
 
@@ -318,6 +341,7 @@ fn count_leading_spaces(line: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
 
@@ -466,5 +490,91 @@ translationsFr =
         assert!(result.contains(r#""Positive""#));
         assert!(result.contains("funcB ="));
         assert!(result.contains(r#""True""#));
+    }
+
+    #[test]
+    fn test_add_after_multiline_case_field() {
+        let temp_dir = TempDir::new().unwrap();
+        let i18n_file = temp_dir.path().join("I18n.elm");
+
+        // Create a file where the last field is a multiline case expression
+        let content = r#"module I18n exposing (..)
+
+type alias Translations =
+    { welcome : String
+    , priority : String -> String
+    }
+
+translationsEn : Translations
+translationsEn =
+    { welcome = "Welcome"
+    , priority = \p -> case p of
+                "high" -> "High"
+                _ -> "Normal"
+    }
+
+translationsFr : Translations
+translationsFr =
+    { welcome = "Bienvenue"
+    , priority = \p -> case p of
+                "high" -> "Haute"
+                _ -> "Normale"
+    }
+"#;
+
+        fs::write(&i18n_file, content).unwrap();
+
+        let languages = vec!["en".to_string(), "fr".to_string()];
+        let translation = Translation {
+            key: "newField".to_string(),
+            values: HashMap::from([
+                ("en".to_string(), "Hello".to_string()),
+                ("fr".to_string(), "Bonjour".to_string()),
+            ]),
+            is_function: false,
+            type_signature: None,
+        };
+
+        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages).unwrap();
+
+        let result = fs::read_to_string(&i18n_file).unwrap();
+
+        // The new field should NOT be inserted in the middle of the case branches
+        assert!(!result.contains(r#""high" -> "High"
+    , newField"#));
+
+        // The new field should be after the case expression's last branch
+        assert!(result.contains(r#"_ -> "Normal"
+    , newField = "Hello""#));
+
+        // Type definition should be correct
+        assert!(result.contains("newField : String"));
+
+        // All existing fields should be intact
+        assert!(result.contains(r#"welcome = "Welcome""#));
+        assert!(result.contains(r#""high" -> "High""#));
+    }
+
+    #[test]
+    fn test_add_preserves_trailing_newline() {
+        let temp_dir = TempDir::new().unwrap();
+        let i18n_file = temp_dir.path().join("I18n.elm");
+
+        let content = "module I18n exposing (..)\n\ntype alias Translations =\n    { welcome : String\n    }\n\ntranslationsEn : Translations\ntranslationsEn =\n    { welcome = \"Welcome\"\n    }\n";
+
+        fs::write(&i18n_file, content).unwrap();
+
+        let languages = vec!["en".to_string()];
+        let translation = Translation {
+            key: "goodbye".to_string(),
+            values: HashMap::from([("en".to_string(), "Goodbye".to_string())]),
+            is_function: false,
+            type_signature: None,
+        };
+
+        add_translation_with_record_name(&i18n_file, &translation, "Translations", &languages).unwrap();
+
+        let result = fs::read_to_string(&i18n_file).unwrap();
+        assert!(result.ends_with('\n'), "File should preserve trailing newline");
     }
 }
