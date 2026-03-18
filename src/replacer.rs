@@ -614,9 +614,9 @@ fn add_t_to_function_call(line: &str, func_name: &str) -> String {
 }
 
 /// Find all translation keys that are not used in the codebase
-pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str) -> Result<Vec<String>> {
+pub fn find_unused_keys(i18n_file: &Path, src_dir: &Path, record_name: &str, languages: &[String]) -> Result<Vec<String>> {
     // Parse the I18n file to get all translation keys
-    let parse_result = parse_i18n_file_with_record_name(i18n_file, record_name)?;
+    let parse_result = parse_i18n_file_with_record_name(i18n_file, record_name, languages)?;
     let all_keys: HashSet<String> = parse_result.translations.keys().cloned().collect();
 
     // Find all uses of translation keys in the codebase
@@ -890,7 +890,8 @@ view t =
         .unwrap();
         
         // Find unused keys
-        let unused = find_unused_keys(&i18n_file, &src_dir, "Translations").unwrap();
+        let languages = vec!["en".to_string(), "fr".to_string()];
+        let unused = find_unused_keys(&i18n_file, &src_dir, "Translations", &languages).unwrap();
         
         assert_eq!(unused.len(), 2);
         assert!(unused.contains(&"alsoUnused".to_string()));

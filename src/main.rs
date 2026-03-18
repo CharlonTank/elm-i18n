@@ -53,47 +53,39 @@ enum Commands {
     Add {
         /// The translation key
         key: String,
-        
-        /// French translation
-        #[arg(long)]
-        fr: String,
-        
-        /// English translation
-        #[arg(long)]
-        en: String,
-        
+
+        /// Translation value as LANG=VALUE (e.g., -t en="Hello" -t fr="Bonjour")
+        #[arg(short = 't', long = "translation", required = true)]
+        translations: Vec<String>,
+
         /// Path to I18n.elm file (defaults to src/I18n.elm)
         #[arg(long, default_value = "src/I18n.elm")]
         file: PathBuf,
-        
+
         /// Replace hardcoded strings in source files
         #[arg(long)]
         replace: bool,
-        
+
         /// Root directory to search for replacements (defaults to src/)
         #[arg(long, default_value = "src")]
         src_dir: PathBuf,
-        
+
     },
-    
+
     /// Add a function translation
     #[command(name = "add-fn")]
     AddFunction {
         /// The function key
         key: String,
-        
+
         /// Type signature (e.g., "Int -> String")
         #[arg(long)]
         type_sig: String,
-        
-        /// English implementation
-        #[arg(long)]
-        en: String,
-        
-        /// French implementation
-        #[arg(long)]
-        fr: String,
-        
+
+        /// Translation value as LANG=VALUE (e.g., -t en="impl" -t fr="impl")
+        #[arg(short = 't', long = "translation", required = true)]
+        translations: Vec<String>,
+
         /// Path to I18n.elm file (defaults to src/I18n.elm)
         #[arg(long, default_value = "src/I18n.elm")]
         file: PathBuf,
@@ -167,6 +159,47 @@ enum Commands {
         file: PathBuf,
     },
 
+    /// Modify an existing translation (update specific language values only)
+    Modify {
+        /// The translation key to modify
+        key: String,
+
+        /// Translation value as LANG=VALUE (e.g., -t es="Hola")
+        #[arg(short = 't', long = "translation", required = true)]
+        translations: Vec<String>,
+
+        /// Path to I18n.elm file (defaults to src/I18n.elm)
+        #[arg(long, default_value = "src/I18n.elm")]
+        file: PathBuf,
+    },
+
+    /// Bulk-modify translations for one language from a JSON file
+    #[command(name = "modify-bulk")]
+    ModifyBulk {
+        /// Language code to modify (e.g., "es", "de")
+        #[arg(long)]
+        lang: String,
+
+        /// Path to JSON file with key-value translations (e.g., {"loading": "Cargando...", ...})
+        #[arg(long = "from")]
+        json_file: PathBuf,
+
+        /// Path to I18n.elm file (defaults to src/I18n.elm)
+        #[arg(long, default_value = "src/I18n.elm")]
+        file: PathBuf,
+    },
+
+    /// Add a new language by duplicating an existing one
+    #[command(name = "add-language")]
+    AddLanguage {
+        /// New language code (e.g., "de", "es", "ja")
+        new_lang: String,
+
+        /// Existing language to copy values from (e.g., "en")
+        #[arg(long, default_value = "en")]
+        from: String,
+    },
+
     /// Show version information
     Version,
 }
@@ -206,6 +239,52 @@ fn validate_and_clean_key(key: &str) -> Result<String> {
     Ok(cleaned_key)
 }
 
+/// Parse translation CLI arguments in LANG=VALUE format
+fn parse_translation_args(args: &[String], languages: &[String]) -> Result<std::collections::HashMap<String, String>> {
+    let mut values = std::collections::HashMap::new();
+
+    for arg in args {
+        let (lang, value) = arg.split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("Invalid translation format: '{}'. Expected LANG=VALUE (e.g., en=\"Hello\")", arg))?;
+        let lang = lang.trim().to_lowercase();
+        if !languages.contains(&lang) {
+            eprintln!("{} Warning: language '{}' is not in configured languages: {}", "⚠".yellow(), lang.yellow(), languages.join(", "));
+        }
+        values.insert(lang, value.to_string());
+    }
+
+    // Check that all configured languages have values
+    for lang in languages {
+        if !values.contains_key(lang) {
+            eprintln!("{} Missing translation for language '{}'. Use -t {}=\"...\"", "✗".red(), lang.yellow(), lang);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(values)
+}
+
+/// Parse translation args without requiring all languages (for modify command)
+fn parse_partial_translation_args(args: &[String], languages: &[String]) -> Result<std::collections::HashMap<String, String>> {
+    let mut values = std::collections::HashMap::new();
+
+    for arg in args {
+        let (lang, value) = arg.split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("Invalid translation format: '{}'. Expected LANG=VALUE (e.g., es=\"Hola\")", arg))?;
+        let lang = lang.trim().to_lowercase();
+        if !languages.contains(&lang) {
+            eprintln!("{} Warning: language '{}' is not in configured languages: {}", "⚠".yellow(), lang.yellow(), languages.join(", "));
+        }
+        values.insert(lang, value.to_string());
+    }
+
+    if values.is_empty() {
+        anyhow::bail!("At least one translation must be provided");
+    }
+
+    Ok(values)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     
@@ -230,13 +309,15 @@ fn main() -> Result<()> {
     // Determine target file based on config and shortcut
     let (file_path, record_name) = determine_target_file(&config, &cli.target, &cli.command)?;
     
+    let languages = config.languages();
+
     match cli.command {
         Commands::Setup => unreachable!(),
-        
-        Commands::Add { key, fr, en, file, replace, src_dir } => {
+
+        Commands::Add { key, translations, file, replace, src_dir } => {
             let cleaned_key = validate_and_clean_key(&key)?;
+            let values = parse_translation_args(&translations, languages)?;
             let actual_file = if file.to_str() == Some("src/I18n.elm") {
-                // Use config-determined file if default was not overridden
                 file_path.clone()
             } else {
                 file
@@ -246,17 +327,18 @@ fn main() -> Result<()> {
             } else {
                 src_dir
             };
-            handle_add(&actual_file, &cleaned_key, &fr, &en, false, None, replace, &actual_src_dir, &record_name)?;
+            handle_add(&actual_file, &cleaned_key, &values, false, None, replace, &actual_src_dir, &record_name, languages)?;
         }
-        
-        Commands::AddFunction { key, type_sig, en, fr, file } => {
+
+        Commands::AddFunction { key, type_sig, translations, file } => {
             let cleaned_key = validate_and_clean_key(&key)?;
+            let values = parse_translation_args(&translations, languages)?;
             let actual_file = if file.to_str() == Some("src/I18n.elm") {
                 file_path.clone()
             } else {
                 file
             };
-            handle_add(&actual_file, &cleaned_key, &fr, &en, true, Some(type_sig), false, config.source_dir(), &record_name)?;
+            handle_add(&actual_file, &cleaned_key, &values, true, Some(type_sig), false, config.source_dir(), &record_name, languages)?;
         }
         
         Commands::Check { key, file } => {
@@ -266,18 +348,38 @@ fn main() -> Result<()> {
             } else {
                 file
             };
-            handle_check(&actual_file, &cleaned_key, &record_name)?;
+            handle_check(&actual_file, &cleaned_key, &record_name, languages)?;
         }
-        
-        Commands::Init { languages, file } => {
+
+        Commands::Init { languages: init_langs, file } => {
             let actual_file = if file.to_str() == Some("src/I18n.elm") {
                 file_path.clone()
             } else {
                 file
             };
-            handle_init(&actual_file, &languages, &record_name)?;
+            handle_init(&actual_file, &init_langs, &record_name)?;
         }
-        
+
+        Commands::Modify { key, translations, file } => {
+            let cleaned_key = validate_and_clean_key(&key)?;
+            let values = parse_partial_translation_args(&translations, languages)?;
+            let actual_file = if file.to_str() == Some("src/I18n.elm") {
+                file_path.clone()
+            } else {
+                file
+            };
+            handle_modify(&actual_file, &cleaned_key, &values, &record_name, languages)?;
+        }
+
+        Commands::ModifyBulk { lang, json_file, file } => {
+            let actual_file = if file.to_str() == Some("src/I18n.elm") {
+                file_path.clone()
+            } else {
+                file
+            };
+            handle_modify_bulk(&actual_file, &lang, &json_file, &record_name, languages)?;
+        }
+
         Commands::Remove { key, file } => {
             let cleaned_key = validate_and_clean_key(&key)?;
             let actual_file = if file.to_str() == Some("src/I18n.elm") {
@@ -285,9 +387,9 @@ fn main() -> Result<()> {
             } else {
                 file
             };
-            handle_remove(&actual_file, &cleaned_key, &record_name)?;
+            handle_remove(&actual_file, &cleaned_key, &record_name, languages)?;
         }
-        
+
         Commands::RemoveUnused { file, src_dir, confirm } => {
             let actual_src_dir = if src_dir.to_str() == Some("src") {
                 config.source_dir().clone()
@@ -305,12 +407,12 @@ fn main() -> Result<()> {
                             continue;
                         }
                         println!("{} Processing {} ({})...", "→".cyan(), shortcut.yellow(), file_config.path.display());
-                        handle_remove_unused(&file_config.path, &actual_src_dir, confirm, &file_config.record_name)?;
+                        handle_remove_unused(&file_config.path, &actual_src_dir, confirm, &file_config.record_name, languages)?;
                         println!();
                     }
                 } else {
                     // Single file mode
-                    handle_remove_unused(&file_path, &actual_src_dir, confirm, &record_name)?;
+                    handle_remove_unused(&file_path, &actual_src_dir, confirm, &record_name, languages)?;
                 }
             } else {
                 // Target was specified, use the determined file
@@ -319,27 +421,27 @@ fn main() -> Result<()> {
                 } else {
                     file
                 };
-                handle_remove_unused(&actual_file, &actual_src_dir, confirm, &record_name)?;
+                handle_remove_unused(&actual_file, &actual_src_dir, confirm, &record_name, languages)?;
             }
         }
-        
+
         Commands::List { file, verbose, filter } => {
             let actual_file = if file.to_str() == Some("src/I18n.elm") {
                 file_path.clone()
             } else {
                 file
             };
-            handle_list(&actual_file, verbose, &filter, &record_name)?
+            handle_list(&actual_file, verbose, &filter, &record_name, languages)?
         }
 
         Commands::Duplicates { file } => {
             // In multi-file mode without a target, find duplicates across all files
             if cli.target.is_none() {
                 if let Config::MultiFile { files, .. } = &config {
-                    handle_duplicates_cross_file(files)?;
+                    handle_duplicates_cross_file(files, languages)?;
                 } else {
                     // Single file mode
-                    handle_duplicates(&file_path, &record_name)?;
+                    handle_duplicates(&file_path, &record_name, languages)?;
                 }
             } else {
                 // Target was specified, use the determined file
@@ -348,15 +450,19 @@ fn main() -> Result<()> {
                 } else {
                     file
                 };
-                handle_duplicates(&actual_file, &record_name)?;
+                handle_duplicates(&actual_file, &record_name, languages)?;
             }
+        }
+
+        Commands::AddLanguage { new_lang, from } => {
+            handle_add_language(&config, &new_lang, &from)?;
         }
 
         Commands::Version => unreachable!(),
         Commands::Status => unreachable!(),
         Commands::SetupClaude => unreachable!()
     }
-    
+
     Ok(())
 }
 
@@ -364,9 +470,10 @@ fn main() -> Result<()> {
 fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &Commands) -> Result<(PathBuf, String)> {
     // For Init command, we might allow creation of new files
     let is_init = matches!(command, Commands::Init { .. });
-    // RemoveUnused and Duplicates can work without a target (processes all files)
+    // These commands can work without a target (they process all files)
     let is_remove_unused = matches!(command, Commands::RemoveUnused { .. });
     let is_duplicates = matches!(command, Commands::Duplicates { .. });
+    let is_add_language = matches!(command, Commands::AddLanguage { .. });
 
     match config {
         Config::SingleFile { file, record_name, .. } => {
@@ -389,7 +496,7 @@ fn determine_target_file(config: &Config, shortcut: &Option<String>, command: &C
                 }
                 None => {
                     // RemoveUnused and Duplicates can run without a target - they process all files
-                    if is_remove_unused || is_duplicates {
+                    if is_remove_unused || is_duplicates || is_add_language {
                         // Return dummy values - the command handler will iterate all files
                         Ok((PathBuf::from(""), String::new()))
                     } else if !is_init {
@@ -493,12 +600,12 @@ fn generate_claude_instructions(config: &Config) -> String {
             instructions.push_str("\n### Usage Examples\n\n");
             instructions.push_str("```bash\n");
             instructions.push_str("# Add a simple translation\n");
-            instructions.push_str(&format!("elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\"\n\n"));
+            instructions.push_str(&format!("elm-i18n add myKey -t en=\"Hello\" -t fr=\"Bonjour\"\n\n"));
             instructions.push_str("# Add a function translation\n");
             instructions.push_str("elm-i18n add-fn itemCount \\\n");
             instructions.push_str("  --type-sig \"Int -> String\" \\\n");
-            instructions.push_str("  --en \"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
-            instructions.push_str("  --fr \"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
+            instructions.push_str("  -t en=\"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
+            instructions.push_str("  -t fr=\"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
             instructions.push_str("# Check if a key exists\n");
             instructions.push_str("elm-i18n check myKey\n\n");
             instructions.push_str("# List all translations\n");
@@ -526,13 +633,13 @@ fn generate_claude_instructions(config: &Config) -> String {
             
             if let Some((first_shortcut, _)) = files.iter().next() {
                 instructions.push_str(&format!("# Add a translation to the {} file\n", first_shortcut));
-                instructions.push_str(&format!("elm-i18n --target {} add myKey --en \"Hello\" --fr \"Bonjour\"\n\n", first_shortcut));
-                
+                instructions.push_str(&format!("elm-i18n --target {} add myKey -t en=\"Hello\" -t fr=\"Bonjour\"\n\n", first_shortcut));
+
                 instructions.push_str(&format!("# Add a function translation to the {} file\n", first_shortcut));
                 instructions.push_str(&format!("elm-i18n --target {} add-fn itemCount \\\n", first_shortcut));
                 instructions.push_str("  --type-sig \"Int -> String\" \\\n");
-                instructions.push_str("  --en \"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
-                instructions.push_str("  --fr \"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
+                instructions.push_str("  -t en=\"\\n -> if n == 1 then \\\"1 item\\\" else String.fromInt n ++ \\\" items\\\"\" \\\n");
+                instructions.push_str("  -t fr=\"\\n -> if n == 1 then \\\"1 élément\\\" else String.fromInt n ++ \\\" éléments\\\"\"\n\n");
                 
                 instructions.push_str(&format!("# Check if a key exists in the {} file\n", first_shortcut));
                 instructions.push_str(&format!("elm-i18n --target {} check myKey\n\n", first_shortcut));
@@ -571,11 +678,11 @@ fn generate_claude_instructions(config: &Config) -> String {
     if config.is_multi_file() {
         if let Config::MultiFile { files, .. } = config {
             if let Some((shortcut, _)) = files.iter().next() {
-                instructions.push_str(&format!("elm-i18n --target {} add myKey --en \"Hello\" --fr \"Bonjour\" --replace\n", shortcut));
+                instructions.push_str(&format!("elm-i18n --target {} add myKey -t en=\"Hello\" -t fr=\"Bonjour\" --replace\n", shortcut));
             }
         }
     } else {
-        instructions.push_str("elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\" --replace\n");
+        instructions.push_str("elm-i18n add myKey -t en=\"Hello\" -t fr=\"Bonjour\" --replace\n");
     }
     instructions.push_str("```\n");
     
@@ -603,7 +710,7 @@ fn handle_status() -> Result<()> {
                     println!("Source Directory: {}", source_dir.display());
                     println!();
                     println!("Usage example:");
-                    println!("  elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\"");
+                    println!("  elm-i18n add myKey -t en=\"Hello\" -t fr=\"Bonjour\"");
                 }
                 Config::MultiFile { files, languages, source_dir, .. } => {
                     println!("Mode: {}", "Multi-file".green());
@@ -626,7 +733,7 @@ fn handle_status() -> Result<()> {
                     println!();
                     println!("Usage example:");
                     if let Some((shortcut, _)) = shortcuts.first() {
-                        println!("  elm-i18n --target {} add myKey --en \"Hello\" --fr \"Bonjour\"", shortcut);
+                        println!("  elm-i18n --target {} add myKey -t en=\"Hello\" -t fr=\"Bonjour\"", shortcut);
                     }
                 }
             }
@@ -706,12 +813,12 @@ fn handle_setup() -> Result<()> {
         println!();
         println!("Example usage:");
         if let Some((shortcut, _)) = config.get_shortcuts().first() {
-            println!("  elm-i18n --{} add myKey --en \"Hello\" --fr \"Bonjour\"", shortcut);
+            println!("  elm-i18n --{} add myKey -t en=\"Hello\" -t fr=\"Bonjour\"", shortcut);
         }
     } else {
         println!();
         println!("Example usage:");
-        println!("  elm-i18n add myKey --en \"Hello\" --fr \"Bonjour\"");
+        println!("  elm-i18n add myKey -t en=\"Hello\" -t fr=\"Bonjour\"");
     }
     
     Ok(())
@@ -856,13 +963,13 @@ fn setup_multi_file_config() -> Result<Config> {
 fn handle_add(
     file: &PathBuf,
     key: &str,
-    fr: &str,
-    en: &str,
+    values: &std::collections::HashMap<String, String>,
     is_function: bool,
     type_sig: Option<String>,
     replace: bool,
     src_dir: &PathBuf,
     record_name: &str,
+    languages: &[String],
 ) -> Result<()> {
     // Check if file exists
     if !file.exists() {
@@ -870,13 +977,16 @@ fn handle_add(
         eprintln!("{} Run 'elm-i18n init' to create a new I18n.elm file", "ℹ".blue());
         std::process::exit(1);
     }
-    
+
     // Check if key already exists
-    match check_key_exists_with_record_name(file, key, record_name)? {
+    match check_key_exists_with_record_name(file, key, record_name, languages)? {
         Some(existing) => {
             println!("{} Translation '{}' already exists:", "ℹ".blue(), key.yellow());
-            println!("  {}: {}", "EN".green(), existing.en);
-            println!("  {}: {}", "FR".green(), existing.fr);
+            for lang in languages {
+                if let Some(val) = existing.values.get(lang) {
+                    println!("  {}: {}", lang.to_uppercase().green(), val);
+                }
+            }
             println!();
             println!("The existing translations might be sufficient. Consider using a different key.");
         }
@@ -884,85 +994,70 @@ fn handle_add(
             // Add the translation
             let translation = Translation {
                 key: key.to_string(),
-                en: en.to_string(),
-                fr: fr.to_string(),
+                values: values.clone(),
                 is_function,
                 type_signature: type_sig,
             };
-            
-            add_translation_with_record_name(file, &translation, record_name)?;
-            
-            println!("{} Added translation '{}' to {}", 
-                "✓".green(), 
-                key.yellow(), 
+
+            add_translation_with_record_name(file, &translation, record_name, languages)?;
+
+            println!("{} Added translation '{}' to {}",
+                "✓".green(),
+                key.yellow(),
                 file.display()
             );
-            
+
             if !is_function {
-                println!("  {}: {}", "EN".green(), en);
-                println!("  {}: {}", "FR".green(), fr);
+                for lang in languages {
+                    if let Some(val) = values.get(lang) {
+                        println!("  {}: {}", lang.to_uppercase().green(), val);
+                    }
+                }
             }
-            
+
             // Handle string replacement if requested
             if replace && !is_function {
                 println!();
                 println!("{} Searching for hardcoded strings to replace...", "🔍".blue());
-                
-                let search_strings = vec![en, fr];
+
+                let search_strings: Vec<&str> = values.values().map(|s| s.as_str()).collect();
                 let matches = find_string_occurrences(src_dir, &search_strings)?;
-                
+
                 if matches.is_empty() {
                     println!("{} No hardcoded strings found to replace", "ℹ".blue());
                 } else {
-                    // Group matches by string value
-                    let en_matches: Vec<_> = matches.iter()
-                        .filter(|m| m.line_content.contains(&format!(r#""{}""#, en)))
-                        .collect();
-                    let fr_matches: Vec<_> = matches.iter()
-                        .filter(|m| m.line_content.contains(&format!(r#""{}""#, fr)))
-                        .collect();
-                    
-                    // Show what will be replaced
-                    if !en_matches.is_empty() {
-                        println!();
-                        println!("{} Found {} occurrences of \"{}\":", "✓".green(), en_matches.len(), en);
-                        for (_i, mat) in en_matches.iter().take(3).enumerate() {
-                            println!("  {}:{}:", 
-                                mat.file_path.display(), 
-                                mat.line_number
-                            );
-                            println!("    {}", mat.line_content.trim());
-                        }
-                        if en_matches.len() > 3 {
-                            println!("  ... and {} more", en_matches.len() - 3);
+                    // Show what will be replaced for each language
+                    for (lang, value) in values {
+                        let lang_matches: Vec<_> = matches.iter()
+                            .filter(|m| m.line_content.contains(&format!(r#""{}""#, value)))
+                            .collect();
+
+                        if !lang_matches.is_empty() {
+                            println!();
+                            println!("{} Found {} occurrences of \"{}\" ({}):", "✓".green(), lang_matches.len(), value, lang.to_uppercase());
+                            for mat in lang_matches.iter().take(3) {
+                                println!("  {}:{}:",
+                                    mat.file_path.display(),
+                                    mat.line_number
+                                );
+                                println!("    {}", mat.line_content.trim());
+                            }
+                            if lang_matches.len() > 3 {
+                                println!("  ... and {} more", lang_matches.len() - 3);
+                            }
                         }
                     }
-                    
-                    if !fr_matches.is_empty() {
-                        println!();
-                        println!("{} Found {} occurrences of \"{}\":", "✓".green(), fr_matches.len(), fr);
-                        for (_i, mat) in fr_matches.iter().take(3).enumerate() {
-                            println!("  {}:{}:", 
-                                mat.file_path.display(), 
-                                mat.line_number
-                            );
-                            println!("    {}", mat.line_content.trim());
-                        }
-                        if fr_matches.len() > 3 {
-                            println!("  ... and {} more", fr_matches.len() - 3);
-                        }
-                    }
-                    
+
                     // Perform replacements
                     println!();
                     println!("{} Replacing strings with t.{}...", "🔄".blue(), key);
                     replace_strings(&matches, key, "I18n")?;
-                    
-                    println!("{} Replaced {} occurrences across {} file(s)", 
-                        "✓".green(), 
+
+                    println!("{} Replaced {} occurrences across {} file(s)",
+                        "✓".green(),
                         matches.len(),
                         {
-                            let unique_files: std::collections::HashSet<_> = 
+                            let unique_files: std::collections::HashSet<_> =
                                 matches.iter().map(|m| &m.file_path).collect();
                             unique_files.len()
                         }
@@ -971,22 +1066,25 @@ fn handle_add(
             }
         }
     }
-    
+
     Ok(())
 }
 
-fn handle_check(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
+fn handle_check(file: &PathBuf, key: &str, record_name: &str, languages: &[String]) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);
     }
-    
-    match check_key_exists_with_record_name(file, key, record_name)? {
+
+    match check_key_exists_with_record_name(file, key, record_name, languages)? {
         Some(translation) => {
             println!("{} Translation '{}' exists:", "✓".green(), key.yellow());
-            println!("  {}: {}", "EN".green(), translation.en);
-            println!("  {}: {}", "FR".green(), translation.fr);
-            
+            for lang in languages {
+                if let Some(val) = translation.values.get(lang) {
+                    println!("  {}: {}", lang.to_uppercase().green(), val);
+                }
+            }
+
             if translation.is_function {
                 if let Some(type_sig) = translation.type_signature {
                     println!("  {}: {}", "Type".cyan(), type_sig);
@@ -997,7 +1095,7 @@ fn handle_check(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
             println!("{} Translation '{}' not found", "✗".red(), key.yellow());
         }
     }
-    
+
     Ok(())
 }
 
@@ -1022,23 +1120,26 @@ fn handle_init(file: &PathBuf, languages: &str, record_name: &str) -> Result<()>
     Ok(())
 }
 
-fn handle_remove(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
+fn handle_remove(file: &PathBuf, key: &str, record_name: &str, languages: &[String]) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);
     }
-    
+
     // Check if key exists first
-    match check_key_exists_with_record_name(file, key, record_name)? {
+    match check_key_exists_with_record_name(file, key, record_name, languages)? {
         Some(translation) => {
             // Show what will be removed
             println!("{} Removing translation '{}':", "ℹ".blue(), key.yellow());
-            println!("  {}: {}", "EN".green(), translation.en);
-            println!("  {}: {}", "FR".green(), translation.fr);
+            for lang in languages {
+                if let Some(val) = translation.values.get(lang) {
+                    println!("  {}: {}", lang.to_uppercase().green(), val);
+                }
+            }
             println!();
-            
+
             // Remove the translation
-            match remove_translation_with_record_name(file, key, record_name) {
+            match remove_translation_with_record_name(file, key, record_name, languages) {
                 Ok(_) => {
                     println!("{} Removed translation '{}' from {}", 
                         "✓".green(), 
@@ -1061,7 +1162,7 @@ fn handle_remove(file: &PathBuf, key: &str, record_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record_name: &str) -> Result<()> {
+fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record_name: &str, languages: &[String]) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);
@@ -1070,7 +1171,7 @@ fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record
     println!("{} Scanning for unused translation keys...", "🔍".blue());
 
     // Find all unused keys
-    let unused_keys = find_unused_keys(file, src_dir, record_name)?;
+    let unused_keys = find_unused_keys(file, src_dir, record_name, languages)?;
     
     if unused_keys.is_empty() {
         println!("{} All translation keys are in use!", "✓".green());
@@ -1096,7 +1197,7 @@ fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record
     println!("{} Removing unused keys...", "🗑".red());
     
     for key in &unused_keys {
-        match remove_translation_with_record_name(file, key, record_name) {
+        match remove_translation_with_record_name(file, key, record_name, languages) {
             Ok(_) => {
                 println!("  {} Removed: {}", "✓".green(), key);
             }
@@ -1112,14 +1213,14 @@ fn handle_remove_unused(file: &PathBuf, src_dir: &PathBuf, confirm: bool, record
     Ok(())
 }
 
-fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_name: &str) -> Result<()> {
+fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_name: &str, languages: &[String]) -> Result<()> {
     if !file.exists() {
         eprintln!("{} File not found: {}", "✗".red(), file.display());
         std::process::exit(1);
     }
-    
+
     // Parse the I18n file
-    let parse_result = parse_i18n_file_with_record_name(file, record_name)?;
+    let parse_result = parse_i18n_file_with_record_name(file, record_name, languages)?;
     let mut translations: Vec<_> = parse_result.translations.into_iter().collect();
     
     // Apply filter if provided
@@ -1159,28 +1260,21 @@ fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_na
                 }
             }
             
-            // Show translations
-            println!("    {}: {}", "EN".green(), 
-                if translation.en.contains('\n') {
-                    format!("\n{}", translation.en.lines()
-                        .map(|line| format!("      {}", line))
-                        .collect::<Vec<_>>()
-                        .join("\n"))
-                } else {
-                    translation.en.clone()
+            // Show translations for each language
+            for lang in languages {
+                if let Some(val) = translation.values.get(lang) {
+                    println!("    {}: {}", lang.to_uppercase().green(),
+                        if val.contains('\n') {
+                            format!("\n{}", val.lines()
+                                .map(|line| format!("      {}", line))
+                                .collect::<Vec<_>>()
+                                .join("\n"))
+                        } else {
+                            val.clone()
+                        }
+                    );
                 }
-            );
-            
-            println!("    {}: {}", "FR".green(),
-                if translation.fr.contains('\n') {
-                    format!("\n{}", translation.fr.lines()
-                        .map(|line| format!("      {}", line))
-                        .collect::<Vec<_>>()
-                        .join("\n"))
-                } else {
-                    translation.fr.clone()
-                }
-            );
+            }
             
             println!();
         }
@@ -1204,7 +1298,7 @@ fn handle_list(file: &PathBuf, verbose: bool, filter: &Option<String>, record_na
     Ok(())
 }
 
-fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
+fn handle_duplicates(file: &PathBuf, record_name: &str, languages: &[String]) -> Result<()> {
     use std::collections::HashMap;
 
     if !file.exists() {
@@ -1215,20 +1309,20 @@ fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
     println!("{} Scanning for duplicate translations...", "🔍".blue());
 
     // Parse the I18n file
-    let parse_result = parse_i18n_file_with_record_name(file, record_name)?;
+    let parse_result = parse_i18n_file_with_record_name(file, record_name, languages)?;
 
-    // Build a map: (en_value, fr_value) -> Vec<key>
-    let mut value_to_keys: HashMap<(String, String), Vec<String>> = HashMap::new();
+    // Build a map: sorted values -> Vec<key>
+    let mut value_to_keys: HashMap<Vec<(String, String)>, Vec<String>> = HashMap::new();
 
     for (key, translation) in parse_result.translations {
-        // Skip function translations - they typically have unique implementations
         if translation.is_function {
             continue;
         }
 
-        let values = (translation.en.clone(), translation.fr.clone());
+        let mut sorted_values: Vec<(String, String)> = translation.values.into_iter().collect();
+        sorted_values.sort();
         value_to_keys
-            .entry(values)
+            .entry(sorted_values)
             .or_default()
             .push(key);
     }
@@ -1245,13 +1339,11 @@ fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Sort by number of duplicates (descending), then by EN value
     duplicates.sort_by(|a, b| {
         b.1.len().cmp(&a.1.len())
-            .then_with(|| a.0.0.cmp(&b.0.0))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
-    // Count total keys that could be consolidated
     let total_duplicate_keys: usize = duplicates.iter().map(|(_, keys)| keys.len()).sum();
     let potential_savings = total_duplicate_keys - duplicates.len();
 
@@ -1263,22 +1355,14 @@ fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
     );
     println!();
 
-    for ((en_value, fr_value), mut keys) in duplicates {
+    for (values, mut keys) in duplicates {
         keys.sort();
 
-        // Truncate long values for display
-        let display_en = if en_value.len() > 40 {
-            format!("{}...", &en_value[..37])
-        } else {
-            en_value
-        };
-        let display_fr = if fr_value.len() > 40 {
-            format!("{}...", &fr_value[..37])
-        } else {
-            fr_value
-        };
+        let display: Vec<String> = values.iter().map(|(_, v)| {
+            if v.len() > 40 { format!("{}...", &v[..37]) } else { v.clone() }
+        }).collect();
 
-        println!("  {} {} / {}:", "•".green(), display_en, display_fr);
+        println!("  {} {}:", "•".green(), display.join(" / "));
         for key in &keys {
             println!("    - {}", key.yellow());
         }
@@ -1294,14 +1378,14 @@ fn handle_duplicates(file: &PathBuf, record_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileConfig>) -> Result<()> {
+fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileConfig>, languages: &[String]) -> Result<()> {
     use std::collections::HashMap;
 
     println!("{} Scanning for duplicate translations across all files...", "🔍".blue());
     println!();
 
-    // Build a map: (en_value, fr_value) -> Vec<(file_shortcut, key)>
-    let mut value_to_keys: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
+    // Build a map: sorted values -> Vec<(file_shortcut, key)>
+    let mut value_to_keys: HashMap<Vec<(String, String)>, Vec<(String, String)>> = HashMap::new();
     let mut files_processed = 0;
     let mut total_keys = 0;
 
@@ -1311,19 +1395,19 @@ fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileCo
             continue;
         }
 
-        let parse_result = parse_i18n_file_with_record_name(&file_config.path, &file_config.record_name)?;
+        let parse_result = parse_i18n_file_with_record_name(&file_config.path, &file_config.record_name, languages)?;
         files_processed += 1;
 
         for (key, translation) in parse_result.translations {
-            // Skip function translations
             if translation.is_function {
                 continue;
             }
 
             total_keys += 1;
-            let values = (translation.en.clone(), translation.fr.clone());
+            let mut sorted_values: Vec<(String, String)> = translation.values.into_iter().collect();
+            sorted_values.sort();
             value_to_keys
-                .entry(values)
+                .entry(sorted_values)
                 .or_default()
                 .push((shortcut.clone(), key));
         }
@@ -1336,7 +1420,6 @@ fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileCo
     let cross_file_duplicates: Vec<_> = value_to_keys
         .into_iter()
         .filter(|(_, keys)| {
-            // Check if keys span multiple files
             let unique_files: std::collections::HashSet<_> = keys.iter().map(|(f, _)| f).collect();
             unique_files.len() > 1
         })
@@ -1347,14 +1430,13 @@ fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileCo
         return Ok(());
     }
 
-    // Sort by number of files involved (descending), then by EN value
     let mut duplicates = cross_file_duplicates;
     duplicates.sort_by(|a, b| {
         let a_files: std::collections::HashSet<_> = a.1.iter().map(|(f, _)| f).collect();
         let b_files: std::collections::HashSet<_> = b.1.iter().map(|(f, _)| f).collect();
         b_files.len().cmp(&a_files.len())
             .then_with(|| b.1.len().cmp(&a.1.len()))
-            .then_with(|| a.0.0.cmp(&b.0.0))
+            .then_with(|| a.0.cmp(&b.0))
     });
 
     let total_duplicate_keys: usize = duplicates.iter().map(|(_, keys)| keys.len()).sum();
@@ -1366,25 +1448,15 @@ fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileCo
     );
     println!();
 
-    for ((en_value, fr_value), mut keys) in duplicates {
-        // Sort keys by file then key name
+    for (values, mut keys) in duplicates {
         keys.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
-        // Truncate long values for display
-        let display_en = if en_value.len() > 40 {
-            format!("{}...", &en_value[..37])
-        } else {
-            en_value
-        };
-        let display_fr = if fr_value.len() > 40 {
-            format!("{}...", &fr_value[..37])
-        } else {
-            fr_value
-        };
+        let display: Vec<String> = values.iter().map(|(_, v)| {
+            if v.len() > 40 { format!("{}...", &v[..37]) } else { v.clone() }
+        }).collect();
 
-        // Group by file for display
         let mut current_file = String::new();
-        println!("  {} {} / {}:", "•".green(), display_en, display_fr);
+        println!("  {} {}:", "•".green(), display.join(" / "));
         for (file_shortcut, key) in &keys {
             if file_shortcut != &current_file {
                 current_file = file_shortcut.clone();
@@ -1402,4 +1474,426 @@ fn handle_duplicates_cross_file(files: &std::collections::HashMap<String, FileCo
     println!("   Consider consolidating into a shared I18n module");
 
     Ok(())
+}
+
+/// Handle the modify command: update specific language values for an existing key
+fn handle_modify(
+    file: &PathBuf,
+    key: &str,
+    values: &std::collections::HashMap<String, String>,
+    record_name: &str,
+    languages: &[String],
+) -> Result<()> {
+    if !file.exists() {
+        eprintln!("{} File not found: {}", "✗".red(), file.display());
+        std::process::exit(1);
+    }
+
+    // Check if key exists
+    match check_key_exists_with_record_name(file, key, record_name, languages)? {
+        Some(existing) => {
+            // Parse the file to find field locations
+            let content = std::fs::read_to_string(file)?;
+            let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+            let parse_result = parse_i18n_file_with_record_name(file, record_name, languages)?;
+
+            // For each language we want to modify
+            for (lang, new_value) in values {
+                // Find the language record bounds
+                if let Some((_, start, end)) = parse_result.lang_bounds.iter().find(|(l, _, _)| l == lang) {
+                    // Find the field within this language record
+                    let is_function = existing.is_function;
+                    let mut field_start = None;
+                    let mut field_end = None;
+
+                    let field_regex = regex::Regex::new(&format!(r"^\s*,?\s*{}\s*=", regex::escape(key)))?;
+                    let next_field_regex = regex::Regex::new(r"^\s*,?\s*\w+\s*=")?;
+
+                    let mut i = *start + 1;
+                    while i <= *end {
+                        if field_regex.is_match(&lines[i]) {
+                            field_start = Some(i);
+                            // Find the end of this field
+                            if is_function {
+                                let mut j = i + 1;
+                                while j <= *end {
+                                    let line = &lines[j];
+                                    let trimmed = line.trim();
+                                    if trimmed.starts_with('}') || next_field_regex.is_match(line) {
+                                        break;
+                                    }
+                                    j += 1;
+                                }
+                                field_end = Some(j - 1);
+                            } else {
+                                field_end = Some(i);
+                            }
+                            break;
+                        }
+                        i += 1;
+                    }
+
+                    if let (Some(fs), Some(fe)) = (field_start, field_end) {
+                        // Detect if it's the first field (uses { key = instead of , key =)
+                        let is_first = lines[fs].trim_start().starts_with('{');
+                        let prefix = if is_first { "    { " } else { "    , " };
+
+                        // Remove old field lines
+                        for _ in fs..=fe {
+                            lines.remove(fs);
+                        }
+
+                        // Insert new field
+                        if is_function {
+                            let new_lines: Vec<String> = format!("{}{} = {}", prefix, key, new_value)
+                                .lines()
+                                .map(|l| l.to_string())
+                                .collect();
+                            for (idx, line) in new_lines.iter().enumerate() {
+                                lines.insert(fs + idx, line.clone());
+                            }
+                        } else {
+                            let escaped = new_value.replace('\\', "\\\\")
+                                .replace('"', "\\\"")
+                                .replace('\n', "\\n");
+                            lines.insert(fs, format!("{}{}= \"{}\"", prefix, key, escaped));
+                        }
+                    }
+                }
+            }
+
+            // Write back
+            let new_content = lines.join("\n");
+            std::fs::write(file, new_content)?;
+
+            println!("{} Modified translation '{}' in {}",
+                "✓".green(),
+                key.yellow(),
+                file.display()
+            );
+            for (lang, val) in values {
+                let display_val = if val.len() > 60 { format!("{}...", &val[..57]) } else { val.clone() };
+                println!("  {}: {}", lang.to_uppercase().green(), display_val);
+            }
+        }
+        None => {
+            eprintln!("{} Translation '{}' not found in {}", "✗".red(), key.yellow(), file.display());
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle the modify-bulk command: update all translations for one language from a JSON file
+fn handle_modify_bulk(
+    file: &PathBuf,
+    lang: &str,
+    json_file: &PathBuf,
+    record_name: &str,
+    languages: &[String],
+) -> Result<()> {
+    use std::collections::HashMap;
+
+    if !file.exists() {
+        eprintln!("{} File not found: {}", "✗".red(), file.display());
+        std::process::exit(1);
+    }
+
+    if !json_file.exists() {
+        eprintln!("{} JSON file not found: {}", "✗".red(), json_file.display());
+        std::process::exit(1);
+    }
+
+    let lang = lang.to_lowercase();
+    if !languages.contains(&lang) {
+        eprintln!("{} Language '{}' is not in configured languages: {}", "✗".red(), lang.yellow(), languages.join(", "));
+        std::process::exit(1);
+    }
+
+    // Read the JSON translations
+    let json_content = std::fs::read_to_string(json_file)?;
+    let translations_map: HashMap<String, String> = serde_json::from_str(&json_content)
+        .map_err(|e| anyhow::anyhow!("Failed to parse JSON file {}: {}", json_file.display(), e))?;
+
+    if translations_map.is_empty() {
+        println!("{} No translations in JSON file", "ℹ".blue());
+        return Ok(());
+    }
+
+    println!("{} Applying {} translations for '{}' to {}...",
+        "→".cyan(), translations_map.len(), lang.to_uppercase().yellow(), file.display());
+
+    // Parse the file to find the language record
+    let parse_result = parse_i18n_file_with_record_name(file, record_name, languages)?;
+    let content = std::fs::read_to_string(file)?;
+    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+    // Find the target language record bounds
+    let (_, lang_start, lang_end) = parse_result.lang_bounds.iter()
+        .find(|(l, _, _)| *l == lang)
+        .ok_or_else(|| anyhow::anyhow!("Language '{}' record not found in file", lang))?;
+
+    let field_regex = regex::Regex::new(r"^\s*[,{]\s*(\w+)\s*=")?;
+    let mut modified = 0;
+    let mut skipped = 0;
+
+    // Iterate through the language record and replace values
+    let mut i = *lang_start + 1;
+    while i < *lang_end {
+        if let Some(captures) = field_regex.captures(&lines[i].clone()) {
+            let key = captures[1].to_string();
+
+            if let Some(new_value) = translations_map.get(&key) {
+                // Check if this is a function (multiline) translation
+                let is_function = parse_result.translations.get(&key)
+                    .map(|t| t.is_function)
+                    .unwrap_or(false);
+
+                if is_function {
+                    // Skip function translations in bulk mode (too complex for JSON)
+                    skipped += 1;
+                    i += 1;
+                    continue;
+                }
+
+                // Detect prefix (first field uses "{ ", others use ", ")
+                let line = &lines[i];
+                let prefix = if line.trim_start().starts_with('{') {
+                    "    { "
+                } else {
+                    "    , "
+                };
+
+                // Replace the line with the new value
+                // Preserve Elm escape sequences (\n, \t, \r, \\) while escaping other chars
+                let escaped = new_value
+                    .replace("\\\\", "\x00BACKSLASH\x00")  // Protect existing \\
+                    .replace("\\n", "\x00NEWLINE\x00")      // Protect \n
+                    .replace("\\t", "\x00TAB\x00")          // Protect \t
+                    .replace("\\r", "\x00CR\x00")           // Protect \r
+                    .replace("\\\"", "\x00QUOTE\x00")       // Protect \"
+                    .replace('\\', "\\\\")                   // Escape remaining backslashes
+                    .replace('"', "\\\"")                    // Escape quotes
+                    .replace('\n', "\\n")                    // Escape actual newlines
+                    .replace("\x00BACKSLASH\x00", "\\\\")   // Restore \\
+                    .replace("\x00NEWLINE\x00", "\\n")      // Restore \n
+                    .replace("\x00TAB\x00", "\\t")          // Restore \t
+                    .replace("\x00CR\x00", "\\r")           // Restore \r
+                    .replace("\x00QUOTE\x00", "\\\"");      // Restore \"
+                lines[i] = format!("{}{} = \"{}\"", prefix, key, escaped);
+                modified += 1;
+            }
+        }
+        i += 1;
+    }
+
+    // Write back
+    let new_content = lines.join("\n");
+    std::fs::write(file, new_content)?;
+
+    println!("{} Modified {} translations, skipped {} function translations",
+        "✓".green(), modified.to_string().yellow(), skipped);
+
+    Ok(())
+}
+
+/// Handle the add-language command: add a new language by duplicating an existing one
+fn handle_add_language(config: &Config, new_lang: &str, from_lang: &str) -> Result<()> {
+    use std::fs;
+
+    let new_lang = new_lang.to_lowercase();
+    let from_lang = from_lang.to_lowercase();
+    let languages = config.languages();
+
+    // Validate
+    if !languages.contains(&from_lang) {
+        eprintln!("{} Source language '{}' is not configured. Available: {}", "✗".red(), from_lang.yellow(), languages.join(", "));
+        std::process::exit(1);
+    }
+    if languages.contains(&new_lang) {
+        eprintln!("{} Language '{}' already exists in configuration", "✗".red(), new_lang.yellow());
+        std::process::exit(1);
+    }
+
+    fn capitalize_first(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    }
+
+    // Get all translation files to process
+    let files_to_process: Vec<(PathBuf, String)> = match config {
+        Config::SingleFile { file, record_name, .. } => {
+            vec![(file.clone(), record_name.clone())]
+        }
+        Config::MultiFile { files, .. } => {
+            files.values().map(|fc| (fc.path.clone(), fc.record_name.clone())).collect()
+        }
+    };
+
+    // Process each file
+    for (file_path, record_name) in &files_to_process {
+        if !file_path.exists() {
+            println!("  {} Skipping {} (file not found)", "⚠".yellow(), file_path.display());
+            continue;
+        }
+
+        println!("{} Processing {}...", "→".cyan(), file_path.display());
+
+        let content = fs::read_to_string(file_path)?;
+        let mut new_content = content.clone();
+
+        // 1. Add new variant to Language type
+        let from_upper = from_lang.to_uppercase();
+        let new_upper = new_lang.to_uppercase();
+        // Find the last language variant and add after it
+        if let Some(pos) = new_content.find(&format!("| {}\n", from_upper)) {
+            let insert_pos = pos + format!("| {}\n", from_upper).len();
+            new_content.insert_str(insert_pos, &format!("    | {}\n", new_upper));
+        } else if let Some(pos) = new_content.find(&format!("= {}\n", from_upper)) {
+            let insert_pos = pos + format!("= {}\n", from_upper).len();
+            new_content.insert_str(insert_pos, &format!("    | {}\n", new_upper));
+        } else {
+            // Add after the last variant we can find
+            let mut last_variant_end = None;
+            for lang in languages {
+                let upper = lang.to_uppercase();
+                if let Some(pos) = new_content.find(&format!("| {}\n", upper)) {
+                    let end = pos + format!("| {}\n", upper).len();
+                    last_variant_end = Some(end);
+                } else if let Some(pos) = new_content.find(&format!("= {}\n", upper)) {
+                    let end = pos + format!("= {}\n", upper).len();
+                    last_variant_end = Some(end);
+                }
+            }
+            if let Some(pos) = last_variant_end {
+                new_content.insert_str(pos, &format!("    | {}\n", new_upper));
+            }
+        }
+
+        // 2. Duplicate the source language's translation record
+        let from_cap = capitalize_first(&from_lang);
+        let new_cap = capitalize_first(&new_lang);
+        let from_fn_name = format!("translations{}", from_cap);
+        let new_fn_name = format!("translations{}", new_cap);
+
+        // Find the source translation record (type annotation + implementation)
+        if let Some(type_start) = new_content.find(&format!("{} : {}", from_fn_name, record_name)) {
+            // Find the end of the record (closing brace followed by blank line or next definition)
+            let after_type = &new_content[type_start..];
+            if let Some(brace_pos) = find_closing_brace(after_type) {
+                let record_end = type_start + brace_pos + 1;
+                let record_text = &new_content[type_start..record_end];
+
+                // Create the new record by replacing the function name
+                let new_record = record_text
+                    .replace(&from_fn_name, &new_fn_name);
+
+                // Insert after the source record (with spacing)
+                let insert_text = format!("\n\n{}", new_record);
+                new_content.insert_str(record_end, &insert_text);
+            }
+        }
+
+        // 3. Update languageToString: add new case
+        let lang_to_str_case = format!("        {} ->\n            \"{}\"", new_upper, new_lang);
+        // Try to insert after the last existing case before the function ends
+        if let Some(pos) = new_content.find(&format!("        {} ->\n            \"{}\"", from_upper, from_lang)) {
+            let case_end = pos + format!("        {} ->\n            \"{}\"", from_upper, from_lang).len();
+            new_content.insert_str(case_end, &format!("\n\n{}", lang_to_str_case));
+        } else {
+            // from_lang might not have an explicit case; find the last explicit case in languageToString
+            // Insert before the closing of the function by finding the last case branch
+            let mut last_case_end = None;
+            for lang in languages {
+                let upper = lang.to_uppercase();
+                let pattern = format!("        {} ->\n            \"{}\"", upper, lang);
+                if let Some(pos) = new_content.find(&pattern) {
+                    let end = pos + pattern.len();
+                    if last_case_end.map_or(true, |prev| end > prev) {
+                        last_case_end = Some(end);
+                    }
+                }
+            }
+            if let Some(end) = last_case_end {
+                new_content.insert_str(end, &format!("\n\n{}", lang_to_str_case));
+            }
+        }
+
+        // 4. Update stringToLanguage: add new case before the default (_ ->) case
+        let str_to_lang_case = format!("        \"{}\" ->\n            {}", new_lang, new_upper);
+        if let Some(pos) = new_content.find(&format!("        \"{}\" ->\n            {}", from_lang, from_upper)) {
+            let case_end = pos + format!("        \"{}\" ->\n            {}", from_lang, from_upper).len();
+            new_content.insert_str(case_end, &format!("\n\n{}", str_to_lang_case));
+        } else {
+            // from_lang is likely the default case (_ -> FROM_UPPER), insert before it
+            if let Some(pos) = new_content.find("        _ ->\n") {
+                // Find the stringToLanguage function context by checking we're in the right function
+                new_content.insert_str(pos, &format!("{}\n\n", str_to_lang_case));
+            }
+        }
+
+        // 5. Update translations function: add new case
+        let translations_case = format!("        {} ->\n            {}", new_upper, new_fn_name);
+        if let Some(pos) = new_content.find(&format!("        {} ->\n            {}", from_upper, from_fn_name)) {
+            let case_end = pos + format!("        {} ->\n            {}", from_upper, from_fn_name).len();
+            new_content.insert_str(case_end, &format!("\n\n{}", translations_case));
+        } else {
+            // from_lang is the default; find the last explicit case in translations function
+            let mut last_case_end = None;
+            for lang in languages {
+                let upper = lang.to_uppercase();
+                let cap = capitalize_first(lang);
+                let fn_name = format!("translations{}", cap);
+                let pattern = format!("        {} ->\n            {}", upper, fn_name);
+                if let Some(pos) = new_content.find(&pattern) {
+                    let end = pos + pattern.len();
+                    if last_case_end.map_or(true, |prev| end > prev) {
+                        last_case_end = Some(end);
+                    }
+                }
+            }
+            if let Some(end) = last_case_end {
+                new_content.insert_str(end, &format!("\n\n{}", translations_case));
+            }
+        }
+
+        fs::write(file_path, new_content)?;
+        println!("  {} Added language '{}' (copied from '{}')", "✓".green(), new_lang.yellow(), from_lang);
+    }
+
+    // Update the config
+    let mut updated_config = config.clone();
+    match &mut updated_config {
+        Config::SingleFile { languages, .. } => languages.push(new_lang.clone()),
+        Config::MultiFile { languages, .. } => languages.push(new_lang.clone()),
+    }
+    updated_config.save()?;
+
+    println!();
+    println!("{} Language '{}' added successfully!", "✓".green(), new_lang.yellow());
+    println!("{} All values are duplicated from '{}' — update them with the actual translations.", "ℹ".blue(), from_lang);
+
+    Ok(())
+}
+
+/// Find the position of the closing brace that ends a record definition
+fn find_closing_brace(text: &str) -> Option<usize> {
+    let mut brace_count = 0;
+    let mut found_open = false;
+    for (i, c) in text.char_indices() {
+        if c == '{' {
+            brace_count += 1;
+            found_open = true;
+        } else if c == '}' {
+            brace_count -= 1;
+            if found_open && brace_count == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
 }

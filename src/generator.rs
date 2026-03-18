@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::parser::parse_i18n_file_with_record_name;
 use crate::types::Translation;
 
-pub fn add_translation_with_record_name(path: &Path, translation: &Translation, record_name: &str) -> Result<()> {
+pub fn add_translation_with_record_name(path: &Path, translation: &Translation, record_name: &str, languages: &[String]) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -15,19 +15,22 @@ pub fn add_translation_with_record_name(path: &Path, translation: &Translation, 
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Parse the file to find insertion points
-    let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
+    let parse_result = parse_i18n_file_with_record_name(path, record_name, languages)?;
 
-    // Add to Translations type
+    // Insert from bottom to top so line numbers stay valid
+    // First: insert into language records (sorted by start_line descending)
+    let mut sorted_bounds = parse_result.lang_bounds.clone();
+    sorted_bounds.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (lang, start, end) in &sorted_bounds {
+        let value = translation.values.get(lang).map(|s| s.as_str()).unwrap_or("");
+        let insertion_line = find_last_field_line(&lines, *start, *end);
+        insert_record_field(&mut lines, insertion_line, &translation.key, value, translation.is_function);
+    }
+
+    // Last: insert into type definition (comes before language records in the file)
     let type_insertion_line = find_last_field_line(&lines, parse_result.type_start_line, parse_result.type_end_line);
     insert_type_field(&mut lines, type_insertion_line, &translation.key, &translation.type_signature);
-
-    // Add to translationsEn
-    let en_insertion_line = find_last_field_line(&lines, parse_result.en_start_line, parse_result.en_end_line);
-    insert_record_field(&mut lines, en_insertion_line, &translation.key, &translation.en, translation.is_function);
-
-    // Add to translationsFr
-    let fr_insertion_line = find_last_field_line(&lines, parse_result.fr_start_line, parse_result.fr_end_line);
-    insert_record_field(&mut lines, fr_insertion_line, &translation.key, &translation.fr, translation.is_function);
 
     // Write the modified content
     let new_content = lines.join("\n");
@@ -74,7 +77,7 @@ fn insert_record_field(lines: &mut Vec<String>, after_line: usize, key: &str, va
             })
             .collect::<Vec<_>>()
             .join("\n");
-        
+
         let new_line = format!("    , {} = {}", key, indented_value);
         lines.insert(after_line + 1, new_line);
     } else {
@@ -99,14 +102,14 @@ pub fn create_i18n_file(path: &Path, template: &str) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
-    
+
     fs::write(path, template)
         .with_context(|| format!("Failed to write I18n.elm to {}", path.display()))?;
-    
+
     Ok(())
 }
 
-pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: &str) -> Result<()> {
+pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: &str, languages: &[String]) -> Result<()> {
     // Create backup
     let backup_path = path.with_extension("elm.bak");
     fs::copy(path, &backup_path)
@@ -116,7 +119,7 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
 
     // Parse the file to find the translation
-    let parse_result = parse_i18n_file_with_record_name(path, record_name)?;
+    let parse_result = parse_i18n_file_with_record_name(path, record_name, languages)?;
 
     // Check if the key exists
     if !parse_result.translations.contains_key(key) {
@@ -128,11 +131,10 @@ pub fn remove_translation_with_record_name(path: &Path, key: &str, record_name: 
     // Remove from Translations type
     remove_type_field(&mut lines, key);
 
-    // Remove from translationsEn
-    remove_record_field(&mut lines, key);
-
-    // Remove from translationsFr
-    remove_record_field(&mut lines, key);
+    // Remove from each language's record (one call per language)
+    for _ in languages {
+        remove_record_field(&mut lines, key);
+    }
 
     // Write the modified content
     let new_content = lines.join("\n");
@@ -174,7 +176,6 @@ fn remove_type_field(lines: &mut Vec<String>, key: &str) {
                     // This is the next field - convert it to first field format
                     // Change ", fieldName : Type" to "  fieldName : Type"
                     let field_line = &lines[next_field_idx];
-                    // Replace the leading ", " with "  " to maintain proper indentation
                     let new_line = field_line.replacen(", ", "  ", 1);
                     lines[next_field_idx] = new_line;
                     break;
@@ -324,7 +325,7 @@ mod tests {
     fn test_remove_anonymous_function_field() {
         let temp_dir = TempDir::new().unwrap();
         let i18n_file = temp_dir.path().join("I18n.elm");
-        
+
         // Create a test I18n file with anonymous functions
         let content = r#"module I18n exposing (..)
 
@@ -375,37 +376,37 @@ translationsFr =
     , goodbye = "Au revoir"
     }
 "#;
-        
+
         fs::write(&i18n_file, content).unwrap();
-        
-        // Remove the ticketStatus field
-        remove_translation(&i18n_file, "ticketStatus").unwrap();
-        
+
+        let languages = vec!["en".to_string(), "fr".to_string()];
+        remove_translation_with_record_name(&i18n_file, "ticketStatus", "Translations", &languages).unwrap();
+
         // Read the result
         let result = fs::read_to_string(&i18n_file).unwrap();
-        
+
         // Verify ticketStatus is completely removed
         assert!(!result.contains("ticketStatus"));
-        
+
         // Verify ticketPriority is intact and not corrupted
         assert!(result.contains("ticketPriority ="));
         assert!(result.contains(r#"Ticket.Low -> "Low""#));
         assert!(result.contains(r#"Ticket.Urgent -> "Urgent""#));
-        
+
         // Verify the structure is still valid (no orphaned lambdas)
         assert!(!result.contains(r#"Ticket.Urgent -> "Urgent"
     \status ->"#));
-        
+
         // Verify other fields are intact
         assert!(result.contains(r#"welcome = "Welcome""#));
         assert!(result.contains(r#"goodbye = "Goodbye""#));
     }
-    
+
     #[test]
     fn test_remove_field_between_functions() {
         let temp_dir = TempDir::new().unwrap();
         let i18n_file = temp_dir.path().join("I18n.elm");
-        
+
         // Create a test with a simple field between two function fields
         let content = r#"module I18n exposing (..)
 
@@ -449,17 +450,17 @@ translationsFr =
                 "Faux"
     }
 "#;
-        
+
         fs::write(&i18n_file, content).unwrap();
-        
-        // Remove the simple field
-        remove_translation(&i18n_file, "simpleField").unwrap();
-        
+
+        let languages = vec!["en".to_string(), "fr".to_string()];
+        remove_translation_with_record_name(&i18n_file, "simpleField", "Translations", &languages).unwrap();
+
         let result = fs::read_to_string(&i18n_file).unwrap();
-        
+
         // Verify simpleField is removed
         assert!(!result.contains("simpleField"));
-        
+
         // Verify both functions are intact
         assert!(result.contains("funcA ="));
         assert!(result.contains(r#""Positive""#));

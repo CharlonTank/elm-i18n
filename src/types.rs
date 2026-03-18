@@ -5,8 +5,7 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Translation {
     pub key: String,
-    pub en: String,
-    pub fr: String,
+    pub values: HashMap<String, String>,
     pub is_function: bool,
     pub type_signature: Option<String>,
 }
@@ -30,9 +29,7 @@ pub struct RecordField {
 pub struct ParseResult {
     pub type_start_line: usize,
     pub type_end_line: usize,
-    pub en_start_line: usize,
-    pub en_end_line: usize,
-    pub fr_start_line: usize,
-    pub fr_end_line: usize,
+    /// (lang_code, start_line, end_line) for each language record
+    pub lang_bounds: Vec<(String, usize, usize)>,
     pub translations: HashMap<String, Translation>,
 }

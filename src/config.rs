@@ -139,6 +139,14 @@ impl Config {
             Config::MultiFile { source_dir, .. } => source_dir,
         }
     }
+
+    /// Get configured languages
+    pub fn languages(&self) -> &[String] {
+        match self {
+            Config::SingleFile { languages, .. } => languages,
+            Config::MultiFile { languages, .. } => languages,
+        }
+    }
     
     
     /// Check if in multi-file mode
@@ -177,7 +185,7 @@ impl Config {
             }
             
             println!();
-            println!("Example: elm-i18n {} add myKey --en \"...\" --fr \"...\"",
+            println!("Example: elm-i18n {} add myKey -t en=\"...\" -t fr=\"...\"",
                 "--<shortcut>".yellow());
         }
     }
